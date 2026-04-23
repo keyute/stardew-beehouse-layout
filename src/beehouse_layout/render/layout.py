@@ -11,27 +11,18 @@ from beehouse_layout.constants import (
     BEEHOUSE_SPRITE,
     FLOOR_SPRITE,
     FLOWER_SPRITE,
-    TILE_ENTRANCE,
-    TILE_OBSTACLE,
-    TILE_PATH,
+    POT_SPRITE,
+    TILE_COLORS,
     TILE_POT,
     TILE_SIZE,
-    TILE_SOIL,
 )
-from beehouse_layout.solver.constraints import TileInfo
+from beehouse_layout.solver.tile_info import TileInfo
 from beehouse_layout.solver.types import Solution, TileState
-
-# Colors for base tile layer (RGBA)
-TILE_COLORS: dict[str, tuple[int, int, int, int]] = {
-    TILE_POT: (0, 200, 0, 100),
-    TILE_SOIL: (139, 90, 43, 120),
-    TILE_OBSTACLE: (200, 0, 0, 100),
-    TILE_PATH: (0, 100, 200, 100),
-    TILE_ENTRANCE: (255, 200, 0, 150),
-}
 
 # Metrics bar height
 METRICS_BAR_HEIGHT = 60
+# Extra vertical space for tall sprites (beehouses) at the top row
+TOP_PADDING = TILE_SIZE
 
 
 def _load_sprite(name: str) -> Image.Image:
@@ -45,7 +36,7 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> Image.Image:
     height = tile_info.height
 
     img_w = width * TILE_SIZE
-    img_h = height * TILE_SIZE + METRICS_BAR_HEIGHT
+    img_h = TOP_PADDING + height * TILE_SIZE + METRICS_BAR_HEIGHT
 
     image = Image.new("RGBA", (img_w, img_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
@@ -54,6 +45,7 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> Image.Image:
     beehouse_sprite = _load_sprite(BEEHOUSE_SPRITE)
     flower_sprite = _load_sprite(FLOWER_SPRITE)
     floor_sprite = _load_sprite(FLOOR_SPRITE)
+    pot_sprite = _load_sprite(POT_SPRITE)
 
     # Pass 1: Draw base tile colors
     for pos, tt in tile_info.tile_type.items():
@@ -62,7 +54,7 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> Image.Image:
         if color is None:
             continue
         x0 = x * TILE_SIZE
-        y0 = y * TILE_SIZE
+        y0 = TOP_PADDING + y * TILE_SIZE
         draw.rectangle(
             [x0, y0, x0 + TILE_SIZE - 1, y0 + TILE_SIZE - 1], fill=color
         )
@@ -72,15 +64,17 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> Image.Image:
         if state in (TileState.BEEHOUSE, TileState.FLOWER):
             x, y = pos
             x0 = x * TILE_SIZE
-            y0 = y * TILE_SIZE
+            y0 = TOP_PADDING + y * TILE_SIZE
             image.paste(floor_sprite, (x0, y0), floor_sprite)
 
-    # Pass 3: Draw flowers
+    # Pass 3: Draw flowers (with garden pot on pot tiles)
     for pos, state in solution.assignments.items():
         if state == TileState.FLOWER:
             x, y = pos
             x0 = x * TILE_SIZE
-            y0 = y * TILE_SIZE
+            y0 = TOP_PADDING + y * TILE_SIZE
+            if tile_info.tile_type.get(pos) == TILE_POT:
+                image.paste(pot_sprite, (x0, y0), pot_sprite)
             image.paste(flower_sprite, (x0, y0), flower_sprite)
 
     # Pass 4: Draw beehouses (2-tile tall sprite, bottom aligned to tile)
@@ -90,11 +84,11 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> Image.Image:
             x, y = pos
             x0 = x * TILE_SIZE
             # Offset up by the extra height (sprite is 2 tiles tall)
-            y0 = y * TILE_SIZE - (bh_h - TILE_SIZE)
+            y0 = TOP_PADDING + y * TILE_SIZE - (bh_h - TILE_SIZE)
             image.paste(beehouse_sprite, (x0, y0), beehouse_sprite)
 
     # Pass 5: Draw metrics bar at bottom
-    bar_y = height * TILE_SIZE
+    bar_y = TOP_PADDING + height * TILE_SIZE
     draw.rectangle(
         [0, bar_y, img_w, bar_y + METRICS_BAR_HEIGHT],
         fill=(40, 40, 40, 230),
@@ -102,7 +96,7 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> Image.Image:
 
     metrics_text = (
         f"Beehouses: {solution.beehouse_count}  |  "
-        f"Flowers: {solution.flower_count} ({solution.pot_count} pots)  |  "
+        f"Flowers: {solution.flower_count} ({solution.pot_count} garden pots)  |  "
         f"Steps: {solution.tour_steps}  |  "
         f"Hard collect: {solution.obstacle_diagonal_count}"
     )

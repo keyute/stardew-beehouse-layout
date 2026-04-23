@@ -2,23 +2,8 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from beehouse_layout.constants import (
-    TILE_ENTRANCE,
-    TILE_OBSTACLE,
-    TILE_PATH,
-    TILE_POT,
-    TILE_SIZE,
-    TILE_SOIL,
-)
+from beehouse_layout.constants import TILE_COLORS, TILE_SIZE
 from beehouse_layout.map.parser import MapData
-
-TILE_COLORS: dict[str, tuple[int, int, int, int]] = {
-    TILE_POT: (0, 200, 0, 100),
-    TILE_SOIL: (139, 90, 43, 120),
-    TILE_OBSTACLE: (200, 0, 0, 100),
-    TILE_PATH: (0, 100, 200, 100),
-    TILE_ENTRANCE: (255, 200, 0, 150),
-}
 
 
 def render_overlay(map_data: MapData) -> Image.Image:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import deque
 
 from beehouse_layout.constants import CARDINAL_OFFSETS
-from beehouse_layout.solver.constraints import TileInfo, get_walkable_set
+from beehouse_layout.solver.tile_info import TileInfo, get_walkable_set
 from beehouse_layout.solver.types import TileState
 
 

@@ -21,6 +21,7 @@ ASSET_DIR = "assets"
 BEEHOUSE_SPRITE = "bee_house.png"
 FLOWER_SPRITE = "fairy_rose.png"
 FLOOR_SPRITE = "wood_floor.png"
+POT_SPRITE = "garden_pot.png"
 
 # Cardinal direction offsets (dx, dy)
 CARDINAL_OFFSETS = ((0, -1), (0, 1), (-1, 0), (1, 0))
@@ -36,3 +37,12 @@ SCORE_BEEHOUSE = 10000
 SCORE_STEP = -1
 SCORE_POT = -100
 SCORE_OBSTACLE_DIAGONAL = -50
+
+# Tile colors for rendering (RGBA)
+TILE_COLORS: dict[str, tuple[int, int, int, int]] = {
+    TILE_POT: (0, 200, 0, 100),
+    TILE_SOIL: (139, 90, 43, 120),
+    TILE_OBSTACLE: (200, 0, 0, 100),
+    TILE_PATH: (0, 100, 200, 100),
+    TILE_ENTRANCE: (255, 200, 0, 150),
+}

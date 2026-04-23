@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from beehouse_layout.constants import BEEHOUSE_TILES, TILE_OBSTACLE
 from beehouse_layout.solver.constraints import (
-    TileInfo,
     check_connectivity,
     check_flower_coverage,
     check_flower_safety,
     classify_beehouse_access,
 )
+from beehouse_layout.solver.tile_info import TileInfo
 from beehouse_layout.solver.types import TileState
 
 
@@ -172,8 +172,6 @@ def _fix_connectivity(
     assignments: dict[tuple[int, int], TileState],
 ) -> None:
     """Remove beehouses until connectivity is restored."""
-    from collections import deque
-
     beehouses = [
         pos for pos, state in assignments.items() if state == TileState.BEEHOUSE
     ]

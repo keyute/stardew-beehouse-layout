@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 import math
+import multiprocessing.synchronize
 import random
 import time
 from collections.abc import Callable
 
 from beehouse_layout.solver.constraints import (
-    TileInfo,
     check_connectivity,
     check_flower_coverage,
     check_flower_safety,
     classify_beehouse_access,
-    is_walkable,
-    score_solution,
 )
+from beehouse_layout.solver.scoring import score_solution
+from beehouse_layout.solver.tile_info import TileInfo
 from beehouse_layout.solver.tour import optimize_tour
 from beehouse_layout.solver.types import Solution, TileState
 
@@ -24,6 +24,27 @@ INITIAL_TEMP = 100.0
 COOLING_RATE = 0.9999
 MIN_TEMP = 0.01
 REPORT_INTERVAL_SECS = 10
+
+
+def _cascade_remove_unsafe(
+    tile_info: TileInfo,
+    assignments: dict[tuple[int, int], TileState],
+    freed_pos: tuple[int, int],
+) -> None:
+    """Remove flowers that became unsafe after freed_pos became walkable, and cascade."""
+    for nb in tile_info.cardinal_neighbors[freed_pos]:
+        if assignments.get(nb) == TileState.FLOWER:
+            if not check_flower_safety(nb, tile_info, assignments):
+                del assignments[nb]
+                # The removed flower's position is now also walkable — cascade
+                _cascade_remove_unsafe(tile_info, assignments, nb)
+    # Remove beehouses that lost flower coverage
+    to_remove = [
+        p for p, s in assignments.items()
+        if s == TileState.BEEHOUSE and not check_flower_coverage(p, tile_info, assignments)
+    ]
+    for p in to_remove:
+        del assignments[p]
 
 
 def _try_add_beehouse(
@@ -68,9 +89,10 @@ def _try_add_beehouse(
 
 
 def _try_remove_beehouse(
+    tile_info: TileInfo,
     assignments: dict[tuple[int, int], TileState],
 ) -> tuple[int, int] | None:
-    """Remove a random beehouse."""
+    """Remove a random beehouse. Cascade-removes exposed flowers and uncovered beehouses."""
     beehouses = [
         pos for pos, state in assignments.items() if state == TileState.BEEHOUSE
     ]
@@ -78,6 +100,8 @@ def _try_remove_beehouse(
         return None
     pos = random.choice(beehouses)
     del assignments[pos]
+    # pos is now walkable — check if any adjacent flowers are exposed
+    _cascade_remove_unsafe(tile_info, assignments, pos)
     return pos
 
 
@@ -158,7 +182,7 @@ def _try_remove_flower(
     tile_info: TileInfo,
     assignments: dict[tuple[int, int], TileState],
 ) -> tuple[int, int] | None:
-    """Remove a random flower. Removes dependent beehouses that lose coverage."""
+    """Remove a random flower. Cascade-removes exposed flowers and uncovered beehouses."""
     flowers = [
         pos for pos, state in assignments.items() if state == TileState.FLOWER
     ]
@@ -166,16 +190,8 @@ def _try_remove_flower(
         return None
     pos = random.choice(flowers)
     del assignments[pos]
-
-    # Remove beehouses that lost flower coverage
-    to_remove = []
-    for bh_pos, state in assignments.items():
-        if state == TileState.BEEHOUSE:
-            if not check_flower_coverage(bh_pos, tile_info, assignments):
-                to_remove.append(bh_pos)
-    for bh_pos in to_remove:
-        del assignments[bh_pos]
-
+    # pos is now walkable — cascade-remove exposed flowers and uncovered beehouses
+    _cascade_remove_unsafe(tile_info, assignments, pos)
     return pos
 
 
@@ -209,20 +225,14 @@ def _try_move_flower(
     del assignments[old_pos]
     assignments[new_pos] = TileState.FLOWER
 
-    # Validate flower safety
+    # Validate new flower safety
     if not check_flower_safety(new_pos, tile_info, assignments):
         assignments.clear()
         assignments.update(saved)
         return False
 
-    # Remove beehouses that lost coverage
-    to_remove = []
-    for bh_pos, state in assignments.items():
-        if state == TileState.BEEHOUSE:
-            if not check_flower_coverage(bh_pos, tile_info, assignments):
-                to_remove.append(bh_pos)
-    for bh_pos in to_remove:
-        del assignments[bh_pos]
+    # old_pos is now walkable — cascade-remove exposed neighbor flowers
+    _cascade_remove_unsafe(tile_info, assignments, old_pos)
 
     # Check connectivity (new_pos became non-walkable, old_pos became walkable)
     if not check_connectivity(tile_info, assignments):
@@ -246,6 +256,7 @@ def anneal(
     initial_assignments: dict[tuple[int, int], TileState],
     duration_secs: float = 300.0,
     on_improvement: Callable[[Solution], None] | None = None,
+    stop_event: multiprocessing.synchronize.Event | None = None,
 ) -> Solution:
     """Run simulated annealing to improve the layout.
 
@@ -254,6 +265,7 @@ def anneal(
         initial_assignments: Starting layout from greedy phase.
         duration_secs: Maximum time to run in seconds.
         on_improvement: Callback when a new best solution is found.
+        stop_event: If set, signals the annealing loop to stop.
 
     Returns:
         Best solution found.
@@ -284,6 +296,8 @@ def anneal(
         elapsed = time.monotonic() - start_time
         if elapsed >= duration_secs:
             break
+        if stop_event is not None and stop_event.is_set():
+            break
         if temp < MIN_TEMP:
             temp = INITIAL_TEMP  # reheat
 
@@ -297,7 +311,7 @@ def anneal(
         if move == "add_beehouse":
             success = _try_add_beehouse(tile_info, assignments) is not None
         elif move == "remove_beehouse":
-            success = _try_remove_beehouse(assignments) is not None
+            success = _try_remove_beehouse(tile_info, assignments) is not None
         elif move == "add_flower_cluster":
             success = _try_add_flower_cluster(tile_info, assignments)
         elif move == "remove_flower":
@@ -322,8 +336,9 @@ def anneal(
                 improvements += 1
 
                 if on_improvement is not None:
-                    tour_steps = optimize_tour(tile_info, assignments)
-                    solution = score_solution(tile_info, assignments, tour_steps)
+                    # Pass a copy so callback doesn't mutate SA state
+                    tour_steps = optimize_tour(tile_info, best_assignments)
+                    solution = score_solution(tile_info, best_assignments, tour_steps)
                     on_improvement(solution)
         else:
             # Rollback
