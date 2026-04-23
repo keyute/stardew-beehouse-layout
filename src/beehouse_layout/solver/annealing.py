@@ -23,7 +23,7 @@ from beehouse_layout.solver.types import Solution, TileState
 INITIAL_TEMP = 100.0
 COOLING_RATE = 0.9999
 MIN_TEMP = 0.01
-REPORT_INTERVAL_SECS = 10
+REPORT_INTERVAL_SECS = 2
 
 
 def _cascade_remove_unsafe(
@@ -256,6 +256,7 @@ def anneal(
     initial_assignments: dict[tuple[int, int], TileState],
     duration_secs: float = 300.0,
     on_improvement: Callable[[Solution], None] | None = None,
+    on_progress: Callable[[int, float, float, int, int], None] | None = None,
     stop_event: multiprocessing.synchronize.Event | None = None,
 ) -> Solution:
     """Run simulated annealing to improve the layout.
@@ -265,6 +266,7 @@ def anneal(
         initial_assignments: Starting layout from greedy phase.
         duration_secs: Maximum time to run in seconds.
         on_improvement: Callback when a new best solution is found.
+        on_progress: Callback(iterations, elapsed, temp, bh_count, improvements).
         stop_event: If set, signals the annealing loop to stop.
 
     Returns:
@@ -351,14 +353,11 @@ def anneal(
         # Periodic progress report
         now = time.monotonic()
         if now - last_report >= REPORT_INTERVAL_SECS:
-            bh_count = sum(
-                1 for s in assignments.values() if s == TileState.BEEHOUSE
-            )
-            print(
-                f"  SA: {iterations} iters, {elapsed:.0f}s, "
-                f"temp={temp:.2f}, beehouses={bh_count}, "
-                f"improvements={improvements}"
-            )
+            if on_progress is not None:
+                bh_count = sum(
+                    1 for s in assignments.values() if s == TileState.BEEHOUSE
+                )
+                on_progress(iterations, elapsed, temp, bh_count, improvements)
             last_report = now
 
     # Final scoring with tour

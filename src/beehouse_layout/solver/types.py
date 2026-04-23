@@ -9,6 +9,16 @@ class TileState(StrEnum):
 
 
 @dataclass
+class WorkerStatus:
+    worker_id: int
+    iterations: int
+    elapsed_secs: float
+    temperature: float
+    beehouse_count: int
+    improvements: int
+
+
+@dataclass
 class Solution:
     assignments: dict[tuple[int, int], TileState] = field(default_factory=dict)
     beehouse_count: int = 0

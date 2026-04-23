@@ -10,12 +10,13 @@ from pathlib import Path
 import click
 
 from beehouse_layout.map.parser import parse_map
+from beehouse_layout.render.dashboard import Dashboard
 from beehouse_layout.render.layout import render_layout, save_layout
 from beehouse_layout.solver.annealing import anneal
 from beehouse_layout.solver.scoring import score_solution
 from beehouse_layout.solver.tile_info import TileInfo, precompute
 from beehouse_layout.solver.tour import optimize_tour
-from beehouse_layout.solver.types import Solution
+from beehouse_layout.solver.types import Solution, WorkerStatus
 from beehouse_layout.solver.validator import cleanup_assignments, validate_solution
 from beehouse_layout.solver.greedy import build_greedy
 
@@ -61,26 +62,26 @@ def _process_improvement(
     solution: Solution,
     best_so_far: Solution,
     map_name: str,
-) -> Solution:
-    """Clean up, validate, and save an improvement. Returns updated best."""
+) -> tuple[Solution, str | None]:
+    """Clean up, validate, and save an improvement. Returns (updated best, message or None)."""
     clean_assignments = dict(solution.assignments)
     cleanup_assignments(tile_info, clean_assignments)
     tour_steps = optimize_tour(tile_info, clean_assignments)
     solution = score_solution(tile_info, clean_assignments, tour_steps)
 
     if solution.score <= best_so_far.score:
-        return best_so_far
+        return best_so_far, None
 
     path = _validate_and_save(tile_info, solution, map_name)
     if path:
-        click.echo(
-            f"  Improved: {solution.beehouse_count} beehouses, "
-            f"{solution.flower_count} flowers "
-            f"({solution.pot_count} garden pots), "
+        msg = (
+            f"  {solution.beehouse_count} bh, "
+            f"{solution.flower_count} fl "
+            f"({solution.pot_count} pt), "
             f"{solution.tour_steps} steps -> {path}"
         )
-        return solution
-    return best_so_far
+        return solution, msg
+    return best_so_far, None
 
 
 def _sa_worker(
@@ -88,14 +89,25 @@ def _sa_worker(
     initial_assignments: dict,
     duration_secs: float,
     seed: int,
-    improvement_queue: multiprocessing.Queue,
+    worker_id: int,
+    result_queue: multiprocessing.Queue,
     stop_event: multiprocessing.Event,
 ) -> None:
-    """SA worker process. Sends improvements to the queue."""
+    """SA worker process. Sends improvements and status to the queue."""
     random.seed(seed)
 
     def on_improvement(solution: Solution) -> None:
-        improvement_queue.put(solution)
+        result_queue.put(solution)
+
+    def on_progress(iterations: int, elapsed: float, temp: float, bh_count: int, improvements: int) -> None:
+        result_queue.put(WorkerStatus(
+            worker_id=worker_id,
+            iterations=iterations,
+            elapsed_secs=elapsed,
+            temperature=temp,
+            beehouse_count=bh_count,
+            improvements=improvements,
+        ))
 
     try:
         anneal(
@@ -103,52 +115,11 @@ def _sa_worker(
             initial_assignments,
             duration_secs=duration_secs,
             on_improvement=on_improvement,
+            on_progress=on_progress,
             stop_event=stop_event,
         )
     except KeyboardInterrupt:
         pass
-
-
-def _run_single(
-    tile_info: TileInfo,
-    assignments: dict,
-    sa_duration: float,
-    best_so_far: Solution,
-    map_name: str,
-) -> Solution:
-    """Run SA in a single process."""
-
-    def on_improvement(solution: Solution) -> None:
-        nonlocal best_so_far
-        best_so_far = _process_improvement(tile_info, solution, best_so_far, map_name)
-
-    try:
-        final = anneal(
-            tile_info,
-            assignments,
-            duration_secs=sa_duration,
-            on_improvement=on_improvement,
-        )
-    except KeyboardInterrupt:
-        click.echo("\nStopped by user.")
-        return best_so_far
-
-    # Final cleanup attempt
-    cleanup_assignments(tile_info, final.assignments)
-    tour_steps = optimize_tour(tile_info, final.assignments)
-    final = score_solution(tile_info, final.assignments, tour_steps)
-
-    if final.score > best_so_far.score:
-        path = _validate_and_save(tile_info, final, map_name)
-        if path:
-            click.echo(
-                f"Final: {final.beehouse_count} beehouses, "
-                f"{final.flower_count} flowers ({final.pot_count} garden pots), "
-                f"{final.tour_steps} steps -> {path}"
-            )
-            best_so_far = final
-
-    return best_so_far
 
 
 def _run_parallel(
@@ -159,43 +130,59 @@ def _run_parallel(
     map_name: str,
     workers: int,
     stagnation: int,
+    dashboard: Dashboard,
 ) -> Solution:
-    """Run SA across multiple processes."""
-    improvement_queue: multiprocessing.Queue = multiprocessing.Queue()
+    """Run SA across multiple processes with a live dashboard."""
+    result_queue: multiprocessing.Queue = multiprocessing.Queue()
     stop_event = multiprocessing.Event()
     processes: list[multiprocessing.Process] = []
 
-    for _ in range(workers):
+    for i in range(workers):
         seed = random.randint(0, 2**63)
         p = multiprocessing.Process(
             target=_sa_worker,
-            args=(tile_info, assignments, sa_duration, seed, improvement_queue, stop_event),
+            args=(tile_info, assignments, sa_duration, seed, i, result_queue, stop_event),
         )
         p.start()
         processes.append(p)
 
-    click.echo(f"  Started {workers} worker processes")
     last_improvement_time = time.monotonic()
+
+    def _handle_msg(msg: WorkerStatus | Solution) -> None:
+        nonlocal best_so_far, last_improvement_time
+        if isinstance(msg, WorkerStatus):
+            dashboard.update_worker(msg)
+        elif isinstance(msg, Solution):
+            new_best, improvement_msg = _process_improvement(
+                tile_info, msg, best_so_far, map_name,
+            )
+            if new_best.score > best_so_far.score:
+                best_so_far = new_best
+                last_improvement_time = time.monotonic()
+                dashboard.update_best(best_so_far)
+                if improvement_msg:
+                    dashboard.log(improvement_msg)
 
     try:
         while any(p.is_alive() for p in processes):
             try:
-                solution = improvement_queue.get(timeout=1)
-                new_best = _process_improvement(tile_info, solution, best_so_far, map_name)
-                if new_best.score > best_so_far.score:
-                    best_so_far = new_best
-                    last_improvement_time = time.monotonic()
+                _handle_msg(result_queue.get(timeout=0.5))
+                # Drain remaining queued messages
+                while True:
+                    try:
+                        _handle_msg(result_queue.get_nowait())
+                    except queue.Empty:
+                        break
             except queue.Empty:
                 pass
 
             if stagnation > 0:
-                stagnation_elapsed = time.monotonic() - last_improvement_time
-                if stagnation_elapsed >= stagnation:
-                    click.echo(f"  No improvement for {stagnation}s, stopping.")
+                if time.monotonic() - last_improvement_time >= stagnation:
+                    dashboard.log(f"Stopped: no improvement for {stagnation}s")
                     stop_event.set()
                     break
     except KeyboardInterrupt:
-        click.echo("\nStopped by user.")
+        dashboard.log("Stopped by user")
     finally:
         stop_event.set()
         for p in processes:
@@ -229,62 +216,59 @@ def _run_parallel(
 def optimize(map_file: str, duration: int, workers: int, stagnation: int) -> None:
     """Calculate optimal beehouse layout."""
     map_data = parse_map(map_file)
-    click.echo(f"Map: {map_data.name}")
 
-    # Clear previous outputs for this map
-    output_dir = Path("outputs") / _slugify(map_data.name)
-    if output_dir.exists():
-        shutil.rmtree(output_dir)
-        click.echo(f"Cleared {output_dir}/")
+    with Dashboard(workers) as dashboard:
+        dashboard.log(f"Map: {map_data.name}")
 
-    tile_info = precompute(map_data)
-    click.echo(
-        f"Tiles: {len(tile_info.beehouse_tiles)} beehouse-eligible, "
-        f"{len(tile_info.flower_tiles)} flower-eligible, "
-        f"{len(tile_info.entrance_tiles)} entrances"
-    )
+        # Clear previous outputs for this map
+        output_dir = Path("outputs") / _slugify(map_data.name)
+        if output_dir.exists():
+            shutil.rmtree(output_dir)
+            dashboard.log(f"Cleared {output_dir}/")
 
-    # Phase 1: Greedy construction
-    click.echo("Phase 1: Greedy construction...")
-    assignments = build_greedy(tile_info)
-    cleanup_assignments(tile_info, assignments)
-    tour_steps = optimize_tour(tile_info, assignments)
-    greedy_solution = score_solution(tile_info, assignments, tour_steps)
-
-    path = _validate_and_save(tile_info, greedy_solution, map_data.name)
-    if path:
-        click.echo(
-            f"  Greedy: {greedy_solution.beehouse_count} beehouses, "
-            f"{greedy_solution.flower_count} flowers "
-            f"({greedy_solution.pot_count} garden pots), "
-            f"{greedy_solution.tour_steps} steps -> {path}"
+        tile_info = precompute(map_data)
+        dashboard.log(
+            f"Tiles: {len(tile_info.beehouse_tiles)} beehouse-eligible, "
+            f"{len(tile_info.flower_tiles)} flower-eligible, "
+            f"{len(tile_info.entrance_tiles)} entrances"
         )
-    else:
-        click.echo("  Greedy: invalid solution (skipped)")
 
-    # Phase 2: Simulated annealing
-    sa_duration = float(duration) if duration > 0 else float("inf")
-    stop_label = []
-    if duration > 0:
-        stop_label.append(f"{duration}s")
-    if stagnation > 0:
-        stop_label.append(f"stagnation {stagnation}s")
-    if workers > 1:
-        stop_label.append(f"{workers} workers")
-    if not stop_label and workers <= 1:
-        stop_label.append("unlimited, Ctrl+C to stop")
-    click.echo(f"Phase 2: Simulated annealing ({', '.join(stop_label)})...")
+        dashboard.log("Greedy construction...")
+        assignments = build_greedy(tile_info)
+        cleanup_assignments(tile_info, assignments)
+        tour_steps = optimize_tour(tile_info, assignments)
+        greedy_solution = score_solution(tile_info, assignments, tour_steps)
 
-    if workers <= 1:
-        best = _run_single(tile_info, assignments, sa_duration, greedy_solution, map_data.name)
-    else:
+        path = _validate_and_save(tile_info, greedy_solution, map_data.name)
+        if path:
+            dashboard.log(
+                f"  Greedy: {greedy_solution.beehouse_count} bh, "
+                f"{greedy_solution.flower_count} fl "
+                f"({greedy_solution.pot_count} pt), "
+                f"{greedy_solution.tour_steps} steps"
+            )
+            dashboard.update_best(greedy_solution)
+        else:
+            dashboard.log("  Greedy: invalid solution (skipped)")
+
+        sa_duration = float(duration) if duration > 0 else float("inf")
+        stop_label = []
+        if duration > 0:
+            stop_label.append(f"{duration}s")
+        if stagnation > 0:
+            stop_label.append(f"stagnation {stagnation}s")
+        stop_label.append(f"{workers} worker{'s' if workers > 1 else ''}")
+        if not duration and not stagnation:
+            stop_label.append("Ctrl+C to stop")
+        dashboard.log(f"SA: {', '.join(stop_label)}")
+
         best = _run_parallel(
             tile_info, assignments, sa_duration, greedy_solution, map_data.name,
-            workers, stagnation,
+            workers, stagnation, dashboard,
         )
 
-    click.echo(
-        f"Best: {best.beehouse_count} beehouses, "
-        f"{best.flower_count} flowers ({best.pot_count} garden pots), "
-        f"{best.tour_steps} steps"
-    )
+        dashboard.log(
+            f"Done: {best.beehouse_count} bh, "
+            f"{best.flower_count} fl ({best.pot_count} pt), "
+            f"{best.tour_steps} steps"
+        )
