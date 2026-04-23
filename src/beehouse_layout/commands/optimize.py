@@ -97,13 +97,16 @@ def _sa_worker(
     def on_improvement(solution: Solution) -> None:
         improvement_queue.put(solution)
 
-    anneal(
-        tile_info,
-        initial_assignments,
-        duration_secs=duration_secs,
-        on_improvement=on_improvement,
-        stop_event=stop_event,
-    )
+    try:
+        anneal(
+            tile_info,
+            initial_assignments,
+            duration_secs=duration_secs,
+            on_improvement=on_improvement,
+            stop_event=stop_event,
+        )
+    except KeyboardInterrupt:
+        pass
 
 
 def _run_single(
@@ -193,20 +196,12 @@ def _run_parallel(
                     break
     except KeyboardInterrupt:
         click.echo("\nStopped by user.")
+    finally:
         stop_event.set()
-
-    # Drain remaining improvements from the queue
-    while True:
-        try:
-            solution = improvement_queue.get_nowait()
-            best_so_far = _process_improvement(tile_info, solution, best_so_far, map_name)
-        except queue.Empty:
-            break
-
-    for p in processes:
-        p.join(timeout=5)
-        if p.is_alive():
+        for p in processes:
             p.terminate()
+        for p in processes:
+            p.join(timeout=5)
 
     return best_so_far
 
