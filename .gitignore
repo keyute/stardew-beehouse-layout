@@ -211,3 +211,5 @@ pyrightconfig.json
 # Generated output
 outputs/
 
+# IntelliJ
+.idea

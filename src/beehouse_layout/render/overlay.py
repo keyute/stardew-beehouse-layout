@@ -2,15 +2,22 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
+from beehouse_layout.constants import (
+    TILE_ENTRANCE,
+    TILE_OBSTACLE,
+    TILE_PATH,
+    TILE_POT,
+    TILE_SIZE,
+    TILE_SOIL,
+)
 from beehouse_layout.map.parser import MapData
 
-TILE_SIZE = 48
-
 TILE_COLORS: dict[str, tuple[int, int, int, int]] = {
-    "pot": (0, 200, 0, 100),
-    "soil": (139, 90, 43, 120),
-    "obstacle": (200, 0, 0, 100),
-    "path": (0, 100, 200, 100),
+    TILE_POT: (0, 200, 0, 100),
+    TILE_SOIL: (139, 90, 43, 120),
+    TILE_OBSTACLE: (200, 0, 0, 100),
+    TILE_PATH: (0, 100, 200, 100),
+    TILE_ENTRANCE: (255, 200, 0, 150),
 }
 
 
