@@ -11,10 +11,14 @@ from beehouse_layout.constants import (
     BEEHOUSE_SPRITE,
     FLOOR_SPRITE,
     FLOWER_SPRITE,
+    GRAVEL_PATH_SPRITE,
     POT_SPRITE,
-    TILE_COLORS,
+    STONE_SPRITE,
+    TILE_OBSTACLE,
     TILE_POT,
     TILE_SIZE,
+    TILE_SOIL,
+    WALKABLE_TILES,
 )
 from beehouse_layout.solver.tile_info import TileInfo
 from beehouse_layout.solver.types import Solution, TileState
@@ -46,46 +50,57 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> Image.Image:
     flower_sprite = _load_sprite(FLOWER_SPRITE)
     floor_sprite = _load_sprite(FLOOR_SPRITE)
     pot_sprite = _load_sprite(POT_SPRITE)
+    stone_sprite = _load_sprite(STONE_SPRITE)
+    gravel_path_sprite = _load_sprite(GRAVEL_PATH_SPRITE)
 
-    # Pass 1: Draw base tile colors
+    # Pass 1: Base textures (wood floor on walkable, stone on obstacles)
     for pos, tt in tile_info.tile_type.items():
         x, y = pos
-        color = TILE_COLORS.get(tt)
-        if color is None:
-            continue
         x0 = x * TILE_SIZE
         y0 = TOP_PADDING + y * TILE_SIZE
-        draw.rectangle(
-            [x0, y0, x0 + TILE_SIZE - 1, y0 + TILE_SIZE - 1], fill=color
-        )
-
-    # Pass 2: Draw floor under placed objects
-    for pos, state in solution.assignments.items():
-        if state in (TileState.BEEHOUSE, TileState.FLOWER):
-            x, y = pos
-            x0 = x * TILE_SIZE
-            y0 = TOP_PADDING + y * TILE_SIZE
+        if tt == TILE_OBSTACLE:
+            image.paste(stone_sprite, (x0, y0), stone_sprite)
+        elif tt in WALKABLE_TILES:
             image.paste(floor_sprite, (x0, y0), floor_sprite)
 
-    # Pass 3: Draw flowers (with garden pot on pot tiles)
+    # Pass 2: Gravel path under ground-planted flowers
     for pos, state in solution.assignments.items():
-        if state == TileState.FLOWER:
+        if state == TileState.FLOWER and tile_info.tile_type.get(pos) == TILE_SOIL:
             x, y = pos
             x0 = x * TILE_SIZE
             y0 = TOP_PADDING + y * TILE_SIZE
-            if tile_info.tile_type.get(pos) == TILE_POT:
-                image.paste(pot_sprite, (x0, y0), pot_sprite)
+            image.paste(gravel_path_sprite, (x0, y0), gravel_path_sprite)
+
+    # Pass 3: Flowers and pots (Y-sorted for correct overlap)
+    pot_y_offset = -(pot_sprite.size[1] - TILE_SIZE)  # -15, bottom-aligned
+    crop_in_pot_offset = -16  # flower shifts up when growing from pot
+
+    flower_positions = sorted(
+        (pos for pos, state in solution.assignments.items() if state == TileState.FLOWER),
+        key=lambda p: p[1],
+    )
+    for pos in flower_positions:
+        x, y = pos
+        x0 = x * TILE_SIZE
+        y0 = TOP_PADDING + y * TILE_SIZE
+        if tile_info.tile_type.get(pos) == TILE_POT:
+            image.paste(pot_sprite, (x0, y0 + pot_y_offset), pot_sprite)
+            image.paste(flower_sprite, (x0, y0 + crop_in_pot_offset), flower_sprite)
+        else:
             image.paste(flower_sprite, (x0, y0), flower_sprite)
 
-    # Pass 4: Draw beehouses (2-tile tall sprite, bottom aligned to tile)
-    bh_w, bh_h = beehouse_sprite.size
-    for pos, state in solution.assignments.items():
-        if state == TileState.BEEHOUSE:
-            x, y = pos
-            x0 = x * TILE_SIZE
-            # Offset up by the extra height (sprite is 2 tiles tall)
-            y0 = TOP_PADDING + y * TILE_SIZE - (bh_h - TILE_SIZE)
-            image.paste(beehouse_sprite, (x0, y0), beehouse_sprite)
+    # Pass 4: Beehouses (Y-sorted for correct overlap of 2-tile tall sprites)
+    bh_y_offset = -(beehouse_sprite.size[1] - TILE_SIZE)
+
+    beehouse_positions = sorted(
+        (pos for pos, state in solution.assignments.items() if state == TileState.BEEHOUSE),
+        key=lambda p: p[1],
+    )
+    for pos in beehouse_positions:
+        x, y = pos
+        x0 = x * TILE_SIZE
+        y0 = TOP_PADDING + y * TILE_SIZE + bh_y_offset
+        image.paste(beehouse_sprite, (x0, y0), beehouse_sprite)
 
     # Pass 5: Draw metrics bar at bottom
     bar_y = TOP_PADDING + height * TILE_SIZE

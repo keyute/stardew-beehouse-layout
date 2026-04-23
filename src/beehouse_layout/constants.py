@@ -22,6 +22,8 @@ BEEHOUSE_SPRITE = "bee_house.png"
 FLOWER_SPRITE = "fairy_rose.png"
 FLOOR_SPRITE = "wood_floor.png"
 POT_SPRITE = "garden_pot.png"
+STONE_SPRITE = "stone.png"
+GRAVEL_PATH_SPRITE = "gravel_path.png"
 
 # Cardinal direction offsets (dx, dy)
 CARDINAL_OFFSETS = ((0, -1), (0, 1), (-1, 0), (1, 0))

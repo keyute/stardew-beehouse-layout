@@ -267,8 +267,13 @@ def optimize(map_file: str, duration: int, workers: int, stagnation: int) -> Non
             workers, stagnation, dashboard,
         )
 
+        # Always save best layout on exit (including Ctrl+C)
+        best_path = str(Path("outputs") / _slugify(map_data.name) / "best_layout.png")
+        best_image = render_layout(tile_info, best)
+        save_layout(best_image, best_path)
+
         dashboard.log(
             f"Done: {best.beehouse_count} bh, "
             f"{best.flower_count} fl ({best.pot_count} pt), "
-            f"{best.tour_steps} steps"
+            f"{best.tour_steps} steps -> {best_path}"
         )
