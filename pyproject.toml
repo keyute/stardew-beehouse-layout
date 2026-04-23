@@ -1,0 +1,17 @@
+[project]
+name = "stardew-beehouse-layout"
+version = "0.1.0"
+description = "Optimal beehouse layout calculator for Stardew Valley"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = ["click==8.3.3", "pillow==12.2.0", "pyyaml==6.0.3"]
+
+[project.scripts]
+beehouse = "beehouse_layout.cli:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/beehouse_layout"]
