@@ -61,10 +61,13 @@ def classify_beehouse_access(
         if dx == 0 or dy == 0:
             return "easy"
 
-        # Diagonal adjacency: check if walkable tile has cardinally adjacent interactable
-        nb_has_interactable = any(
-            cn in tile_info.interactable_tiles
-            for cn in tile_info.cardinal_neighbors.get(nb, [])
+        # Diagonal adjacency: check if the two "squeeze" tiles (cardinally adjacent
+        # to both beehouse and player) are interactable obstacles
+        squeeze1 = (x + dx, y)
+        squeeze2 = (x, y + dy)
+        nb_has_interactable = (
+            squeeze1 in tile_info.interactable_tiles
+            or squeeze2 in tile_info.interactable_tiles
         )
         if nb_has_interactable:
             has_hard = True
@@ -81,13 +84,82 @@ def classify_beehouse_access(
 def check_connectivity(
     tile_info: TileInfo,
     assignments: dict[tuple[int, int], TileState],
+    *,
+    removed_walkable: set[tuple[int, int]] | None = None,
 ) -> bool:
     """Check all beehouses are reachable from an entrance via connected walkable tiles.
 
     We don't require ALL walkable tiles to be connected — only that every beehouse
     has at least one adjacent walkable tile reachable from an entrance.
     All entrance tiles must also be reachable.
+
+    If removed_walkable is provided (tiles that just became non-walkable), a fast
+    heuristic is tried first: if every removed tile had at most 1 cardinal walkable
+    neighbor, or a bounded local BFS confirms its neighbors are still connected,
+    the full BFS is skipped.
     """
+    if removed_walkable is not None:
+        result = _check_connectivity_fast(tile_info, assignments, removed_walkable)
+        if result is not None:
+            return result
+
+    return _check_connectivity_full(tile_info, assignments)
+
+
+def _check_connectivity_fast(
+    tile_info: TileInfo,
+    assignments: dict[tuple[int, int], TileState],
+    removed_walkable: set[tuple[int, int]],
+) -> bool | None:
+    """Fast connectivity heuristic after tiles became non-walkable.
+
+    Returns True if connectivity is confirmed, None if inconclusive (need full BFS).
+    Assumes connectivity was established before the change.
+
+    Collects all walkable cardinal neighbors of the entire removed set, then checks
+    if they're all still connected. This correctly handles multi-tile removals where
+    individual tiles look like leaves but collectively form a bridge.
+    """
+    if not removed_walkable:
+        return True  # No tiles became non-walkable — can't disconnect
+
+    # Collect all walkable cardinal neighbors of the removed set
+    exterior_neighbors: set[tuple[int, int]] = set()
+    for pos in removed_walkable:
+        for nb in tile_info.cardinal_neighbors[pos]:
+            if is_walkable(nb, tile_info, assignments):
+                exterior_neighbors.add(nb)
+
+    if len(exterior_neighbors) <= 1:
+        return True  # 0-1 exterior neighbors — can't disconnect
+
+    # Check all exterior neighbors are still connected via bounded local BFS
+    start = next(iter(exterior_neighbors))
+    targets = exterior_neighbors - {start}
+    visited = {start}
+    queue = deque([start])
+    steps = 0
+
+    while queue and targets and steps < 50:
+        current = queue.popleft()
+        steps += 1
+        for nb in tile_info.cardinal_neighbors[current]:
+            if nb not in visited and is_walkable(nb, tile_info, assignments):
+                visited.add(nb)
+                queue.append(nb)
+                targets.discard(nb)
+
+    if targets:
+        return None  # Inconclusive — fall back to full BFS
+
+    return True
+
+
+def _check_connectivity_full(
+    tile_info: TileInfo,
+    assignments: dict[tuple[int, int], TileState],
+) -> bool:
+    """Full BFS connectivity check."""
     walkable = get_walkable_set(tile_info, assignments)
     if not walkable:
         # No walkable tiles: OK only if no beehouses exist

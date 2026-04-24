@@ -76,8 +76,19 @@ def _try_place_cluster(
             _rollback(assignments, saved_states)
             return False
 
+    # Check adjacent existing beehouses still accessible
+    all_placed = {pos} | set(shield_positions)
+    for placed in all_placed:
+        for nb in tile_info.all_neighbors[placed]:
+            if nb not in all_placed and assignments.get(nb) == TileState.BEEHOUSE:
+                access = classify_beehouse_access(nb, tile_info, assignments)
+                if access is None or (no_hard and access == "hard"):
+                    _rollback(assignments, saved_states)
+                    return False
+
     # Validate connectivity
-    if not check_connectivity(tile_info, assignments):
+    removed = {pos} | set(shield_positions)
+    if not check_connectivity(tile_info, assignments, removed_walkable=removed):
         _rollback(assignments, saved_states)
         return False
 
@@ -90,14 +101,17 @@ def _try_place_flower_group(
     assignments: dict[tuple[int, int], TileState],
     *,
     no_hard: bool = False,
-) -> bool:
-    """Try to place multiple flowers atomically with shared shielding. Returns True if successful."""
+) -> dict[tuple[int, int], TileState | None] | None:
+    """Try to place multiple flowers atomically with shared shielding.
+
+    Returns changeset on success (for rollback), or None on failure.
+    """
     # Validate all positions are flower-eligible and empty
     for pos in positions:
         if pos not in tile_info.flower_tiles:
-            return False
+            return None
         if assignments.get(pos, TileState.EMPTY) != TileState.EMPTY:
-            return False
+            return None
 
     # Compute shield positions needed (neighbors not in group, not already shielded)
     shield_needed: set[tuple[int, int]] = set()
@@ -111,20 +125,20 @@ def _try_place_flower_group(
             if tt is None:
                 continue  # map edge
             if tt not in BEEHOUSE_TILES:
-                return False  # can't shield (entrance, walkway)
+                return None  # can't shield (entrance, walkway)
             state = assignments.get(nb, TileState.EMPTY)
             if state == TileState.BEEHOUSE or state == TileState.FLOWER:
                 continue  # already shielded
             if state != TileState.EMPTY:
-                return False
+                return None
             shield_needed.add(nb)
 
-    # Save state for rollback (targeted, not full copy)
-    saved_states: dict[tuple[int, int], TileState | None] = {}
+    # Build changeset (record old states before modification)
+    changeset: dict[tuple[int, int], TileState | None] = {}
     for pos in positions:
-        saved_states[pos] = assignments.get(pos)
+        changeset[pos] = assignments.get(pos)
     for sp in shield_needed:
-        saved_states[sp] = assignments.get(sp)
+        changeset[sp] = assignments.get(sp)
 
     # Place all flowers and shield beehouses
     for pos in positions:
@@ -135,15 +149,15 @@ def _try_place_flower_group(
     # Validate flower safety
     for pos in positions:
         if not check_flower_safety(pos, tile_info, assignments):
-            _rollback(assignments, saved_states)
-            return False
+            _rollback(assignments, changeset)
+            return None
 
     # Validate new beehouse accessibility
     for sp in shield_needed:
         access = classify_beehouse_access(sp, tile_info, assignments)
         if access is None or (no_hard and access == "hard"):
-            _rollback(assignments, saved_states)
-            return False
+            _rollback(assignments, changeset)
+            return None
 
     # Check adjacent existing beehouses still accessible
     all_placed = positions | shield_needed
@@ -152,15 +166,16 @@ def _try_place_flower_group(
             if nb not in all_placed and assignments.get(nb) == TileState.BEEHOUSE:
                 access = classify_beehouse_access(nb, tile_info, assignments)
                 if access is None or (no_hard and access == "hard"):
-                    _rollback(assignments, saved_states)
-                    return False
+                    _rollback(assignments, changeset)
+                    return None
 
     # Validate connectivity
-    if not check_connectivity(tile_info, assignments):
-        _rollback(assignments, saved_states)
-        return False
+    removed = positions | shield_needed
+    if not check_connectivity(tile_info, assignments, removed_walkable=removed):
+        _rollback(assignments, changeset)
+        return None
 
-    return True
+    return changeset
 
 
 def _find_flower_components(
@@ -286,8 +301,7 @@ def build_greedy(tile_info: TileInfo, *, no_hard: bool = False) -> dict[tuple[in
             continue
         _try_place_cluster(pos, tile_info, assignments, no_hard=no_hard)
 
-    # Step 2: Fill additional beehouses near existing flowers
-    # Only place beehouses adjacent to walkable tiles (ensures accessibility)
+    # Step 3: Fill additional beehouses near existing flowers
     flower_positions = [
         pos for pos, state in assignments.items() if state == TileState.FLOWER
     ]
@@ -310,26 +324,16 @@ def build_greedy(tile_info: TileInfo, *, no_hard: bool = False) -> dict[tuple[in
             neighbor_lost_access = False
             for adj in tile_info.all_neighbors[nb]:
                 if assignments.get(adj) == TileState.BEEHOUSE:
-                    if classify_beehouse_access(adj, tile_info, assignments) is None:
+                    adj_access = classify_beehouse_access(adj, tile_info, assignments)
+                    if adj_access is None or (no_hard and adj_access == "hard"):
                         neighbor_lost_access = True
                         break
             if neighbor_lost_access:
                 del assignments[nb]
                 continue
 
-            # Must not expose any adjacent flower
-            safe = True
-            for fnb in tile_info.cardinal_neighbors[nb]:
-                if assignments.get(fnb) == TileState.FLOWER:
-                    if not check_flower_safety(fnb, tile_info, assignments):
-                        safe = False
-                        break
-            if not safe:
-                del assignments[nb]
-                continue
-
-            # Must maintain connectivity
-            if not check_connectivity(tile_info, assignments):
+            # Must maintain connectivity (single tile — fast-path effective)
+            if not check_connectivity(tile_info, assignments, removed_walkable={nb}):
                 del assignments[nb]
 
     return assignments

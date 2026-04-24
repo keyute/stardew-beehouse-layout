@@ -8,13 +8,14 @@ import random
 import time
 from collections.abc import Callable
 
+from beehouse_layout.constants import BEEHOUSE_TILES
 from beehouse_layout.solver.constraints import (
     check_connectivity,
     check_flower_coverage,
     check_flower_safety,
     classify_beehouse_access,
 )
-from beehouse_layout.solver.greedy import _try_place_flower_group
+from beehouse_layout.solver.greedy import _rollback, _try_place_flower_group
 from beehouse_layout.solver.scoring import score_solution
 from beehouse_layout.solver.tile_info import TileInfo
 from beehouse_layout.solver.tour import optimize_tour
@@ -31,21 +32,29 @@ def _cascade_remove_unsafe(
     tile_info: TileInfo,
     assignments: dict[tuple[int, int], TileState],
     freed_pos: tuple[int, int],
+    changeset: dict[tuple[int, int], TileState | None] | None = None,
 ) -> None:
     """Remove flowers that became unsafe after freed_pos became walkable, and cascade."""
     for nb in tile_info.all_neighbors[freed_pos]:
         if assignments.get(nb) == TileState.FLOWER:
             if not check_flower_safety(nb, tile_info, assignments):
+                if changeset is not None and nb not in changeset:
+                    changeset[nb] = assignments[nb]
                 del assignments[nb]
-                # The removed flower's position is now also walkable — cascade
-                _cascade_remove_unsafe(tile_info, assignments, nb)
-    # Remove beehouses that lost flower coverage
+                _cascade_remove_unsafe(tile_info, assignments, nb, changeset)
+    # Remove beehouses that lost flower coverage (only those in range of freed_pos)
     to_remove = [
-        p for p, s in assignments.items()
-        if s == TileState.BEEHOUSE and not check_flower_coverage(p, tile_info, assignments)
+        nb for nb in tile_info.flower_diamond[freed_pos]
+        if assignments.get(nb) == TileState.BEEHOUSE
+        and not check_flower_coverage(nb, tile_info, assignments)
     ]
     for p in to_remove:
+        if changeset is not None and p not in changeset:
+            changeset[p] = assignments[p]
         del assignments[p]
+    # Removed beehouses are now walkable — cascade for each
+    for p in to_remove:
+        _cascade_remove_unsafe(tile_info, assignments, p, changeset)
 
 
 def _try_add_beehouse(
@@ -53,8 +62,11 @@ def _try_add_beehouse(
     assignments: dict[tuple[int, int], TileState],
     *,
     no_hard: bool = False,
-) -> tuple[int, int] | None:
-    """Try to place a beehouse on a random empty beehouse-eligible tile."""
+) -> dict[tuple[int, int], TileState | None] | None:
+    """Try to place a beehouse on a random empty beehouse-eligible tile.
+
+    Returns changeset on success (for rollback), or None on failure.
+    """
     candidates = [
         pos
         for pos in tile_info.beehouse_tiles
@@ -87,27 +99,31 @@ def _try_add_beehouse(
                 del assignments[pos]
                 return None
     # Check connectivity (placing beehouse removes walkable tile)
-    if not check_connectivity(tile_info, assignments):
+    if not check_connectivity(tile_info, assignments, removed_walkable={pos}):
         del assignments[pos]
         return None
-    return pos
+    return {pos: None}
 
 
 def _try_remove_beehouse(
     tile_info: TileInfo,
     assignments: dict[tuple[int, int], TileState],
-) -> tuple[int, int] | None:
-    """Remove a random beehouse. Cascade-removes exposed flowers and uncovered beehouses."""
+) -> dict[tuple[int, int], TileState | None] | None:
+    """Remove a random beehouse. Cascade-removes exposed flowers and uncovered beehouses.
+
+    Returns changeset on success (for rollback), or None on failure.
+    """
     beehouses = [
         pos for pos, state in assignments.items() if state == TileState.BEEHOUSE
     ]
     if not beehouses:
         return None
     pos = random.choice(beehouses)
+    changeset: dict[tuple[int, int], TileState | None] = {pos: assignments[pos]}
     del assignments[pos]
     # pos is now walkable — check if any adjacent flowers are exposed
-    _cascade_remove_unsafe(tile_info, assignments, pos)
-    return pos
+    _cascade_remove_unsafe(tile_info, assignments, pos, changeset)
+    return changeset
 
 
 def _try_add_flower_cluster(
@@ -115,12 +131,14 @@ def _try_add_flower_cluster(
     assignments: dict[tuple[int, int], TileState],
     *,
     no_hard: bool = False,
-) -> bool:
+) -> dict[tuple[int, int], TileState | None] | None:
     """Place a flower + beehouses on all 8 neighbors as a unit.
 
     This solves the chicken-and-egg problem: flowers need shielding beehouses,
     beehouses need flowers in range. Placing them together ensures both
     constraints are satisfied from the start.
+
+    Returns changeset on success (for rollback), or None on failure.
     """
     candidates = [
         pos
@@ -128,7 +146,7 @@ def _try_add_flower_cluster(
         if assignments.get(pos, TileState.EMPTY) == TileState.EMPTY
     ]
     if not candidates:
-        return False
+        return None
     pos = random.choice(candidates)
 
     # Check all 8 neighbors can be shielded (beehouse-eligible, obstacle, or map edge)
@@ -137,16 +155,18 @@ def _try_add_flower_cluster(
         if nb in tile_info.obstacle_tiles:
             continue  # obstacles shield naturally
         if nb not in tile_info.beehouse_tiles:
-            return False  # can't shield this side (e.g. entrance, walkway)
+            return None  # can't shield this side (e.g. entrance, walkway)
         if assignments.get(nb, TileState.EMPTY) == TileState.EMPTY:
             shield_positions.append(nb)
         elif assignments.get(nb) in (TileState.BEEHOUSE, TileState.FLOWER):
             continue  # already shielded
         else:
-            return False
+            return None
 
-    # Save state
-    saved = dict(assignments)
+    # Build changeset (record old states before modification)
+    changeset: dict[tuple[int, int], TileState | None] = {pos: assignments.get(pos)}
+    for sp in shield_positions:
+        changeset[sp] = assignments.get(sp)
 
     # Place flower and shielding beehouses
     assignments[pos] = TileState.FLOWER
@@ -155,17 +175,15 @@ def _try_add_flower_cluster(
 
     # Validate flower safety
     if not check_flower_safety(pos, tile_info, assignments):
-        assignments.clear()
-        assignments.update(saved)
-        return False
+        _rollback(assignments, changeset)
+        return None
 
     # Validate all new beehouses are accessible
     for sp in shield_positions:
         access = classify_beehouse_access(sp, tile_info, assignments)
         if access is None or (no_hard and access == "hard"):
-            assignments.clear()
-            assignments.update(saved)
-            return False
+            _rollback(assignments, changeset)
+            return None
 
     # Check adjacent existing beehouses still have access
     all_placed = {pos} | set(shield_positions)
@@ -174,46 +192,54 @@ def _try_add_flower_cluster(
             if nb not in all_placed and assignments.get(nb) == TileState.BEEHOUSE:
                 access = classify_beehouse_access(nb, tile_info, assignments)
                 if access is None or (no_hard and access == "hard"):
-                    assignments.clear()
-                    assignments.update(saved)
-                    return False
+                    _rollback(assignments, changeset)
+                    return None
 
     # Check connectivity (multiple tiles removed from walkable set)
-    if not check_connectivity(tile_info, assignments):
-        assignments.clear()
-        assignments.update(saved)
-        return False
+    removed = {pos} | set(shield_positions)
+    if not check_connectivity(tile_info, assignments, removed_walkable=removed):
+        _rollback(assignments, changeset)
+        return None
 
-    return True
+    return changeset
 
 
 def _try_remove_flower(
     tile_info: TileInfo,
     assignments: dict[tuple[int, int], TileState],
-) -> tuple[int, int] | None:
-    """Remove a random flower. Cascade-removes exposed flowers and uncovered beehouses."""
+) -> dict[tuple[int, int], TileState | None] | None:
+    """Remove a random flower. Cascade-removes exposed flowers and uncovered beehouses.
+
+    Returns changeset on success (for rollback), or None on failure.
+    """
     flowers = [
         pos for pos, state in assignments.items() if state == TileState.FLOWER
     ]
     if not flowers:
         return None
     pos = random.choice(flowers)
+    changeset: dict[tuple[int, int], TileState | None] = {pos: assignments[pos]}
     del assignments[pos]
     # pos is now walkable — cascade-remove exposed flowers and uncovered beehouses
-    _cascade_remove_unsafe(tile_info, assignments, pos)
-    return pos
+    _cascade_remove_unsafe(tile_info, assignments, pos, changeset)
+    return changeset
 
 
 def _try_move_flower(
     tile_info: TileInfo,
     assignments: dict[tuple[int, int], TileState],
-) -> bool:
-    """Try to move a flower to a nearby position."""
+    *,
+    no_hard: bool = False,
+) -> dict[tuple[int, int], TileState | None] | None:
+    """Try to move a flower to a nearby position.
+
+    Returns changeset on success (for rollback), or None on failure.
+    """
     flowers = [
         pos for pos, state in assignments.items() if state == TileState.FLOWER
     ]
     if not flowers:
-        return False
+        return None
     old_pos = random.choice(flowers)
 
     # Find nearby empty flower-eligible tiles
@@ -223,12 +249,15 @@ def _try_move_flower(
             if assignments.get(nb, TileState.EMPTY) == TileState.EMPTY:
                 candidates.append(nb)
     if not candidates:
-        return False
+        return None
 
     new_pos = random.choice(candidates)
 
-    # Save state for rollback
-    saved = dict(assignments)
+    # Build changeset (record old states before modification)
+    changeset: dict[tuple[int, int], TileState | None] = {
+        old_pos: assignments[old_pos],
+        new_pos: assignments.get(new_pos),
+    }
 
     # Move
     del assignments[old_pos]
@@ -236,20 +265,27 @@ def _try_move_flower(
 
     # Validate new flower safety
     if not check_flower_safety(new_pos, tile_info, assignments):
-        assignments.clear()
-        assignments.update(saved)
-        return False
+        _rollback(assignments, changeset)
+        return None
 
     # old_pos is now walkable — cascade-remove exposed neighbor flowers
-    _cascade_remove_unsafe(tile_info, assignments, old_pos)
+    _cascade_remove_unsafe(tile_info, assignments, old_pos, changeset)
+
+    # Check that beehouses adjacent to new_pos still have access
+    # (new_pos became non-walkable, so adjacent beehouses may have lost access)
+    for nb in tile_info.all_neighbors[new_pos]:
+        if assignments.get(nb) == TileState.BEEHOUSE:
+            access = classify_beehouse_access(nb, tile_info, assignments)
+            if access is None or (no_hard and access == "hard"):
+                _rollback(assignments, changeset)
+                return None
 
     # Check connectivity (new_pos became non-walkable, old_pos became walkable)
-    if not check_connectivity(tile_info, assignments):
-        assignments.clear()
-        assignments.update(saved)
-        return False
+    if not check_connectivity(tile_info, assignments, removed_walkable={new_pos}):
+        _rollback(assignments, changeset)
+        return None
 
-    return True
+    return changeset
 
 
 def _try_add_multi_flower_cluster(
@@ -257,15 +293,18 @@ def _try_add_multi_flower_cluster(
     assignments: dict[tuple[int, int], TileState],
     *,
     no_hard: bool = False,
-) -> bool:
-    """Place 2-4 adjacent flowers as a group with shared shielding."""
+) -> dict[tuple[int, int], TileState | None] | None:
+    """Place 2-4 adjacent flowers as a group with shared shielding.
+
+    Returns changeset on success (for rollback), or None on failure.
+    """
     candidates = [
         pos
         for pos in tile_info.flower_tiles
         if assignments.get(pos, TileState.EMPTY) == TileState.EMPTY
     ]
     if not candidates:
-        return False
+        return None
     seed = random.choice(candidates)
 
     # Random walk to find 1-3 more adjacent empty flower-eligible tiles
@@ -288,7 +327,7 @@ def _try_add_multi_flower_cluster(
         frontier.append(nb)
 
     if len(group) < 2:
-        return False
+        return None
 
     return _try_place_flower_group(group, tile_info, assignments, no_hard=no_hard)
 
@@ -298,8 +337,11 @@ def _try_convert_beehouse_to_flower(
     assignments: dict[tuple[int, int], TileState],
     *,
     no_hard: bool = False,
-) -> bool:
-    """Convert a beehouse adjacent to a flower into a flower, adding shield beehouses."""
+) -> dict[tuple[int, int], TileState | None] | None:
+    """Convert a beehouse adjacent to a flower into a flower, adding shield beehouses.
+
+    Returns changeset on success (for rollback), or None on failure.
+    """
     # Find beehouses on flower-eligible tiles adjacent to an existing flower
     candidates = [
         pos for pos, state in assignments.items()
@@ -311,24 +353,14 @@ def _try_convert_beehouse_to_flower(
         )
     ]
     if not candidates:
-        return False
+        return None
     pos = random.choice(candidates)
 
-    # Save state for rollback (targeted)
-    saved_states: dict[tuple[int, int], TileState | None] = {pos: assignments.get(pos)}
+    # Build changeset (record old states before modification)
+    changeset: dict[tuple[int, int], TileState | None] = {pos: assignments.get(pos)}
 
-    # Remove beehouse
+    # Remove beehouse and convert to flower
     del assignments[pos]
-
-    # Check if removing the beehouse exposes any adjacent flower
-    for nb in tile_info.all_neighbors[pos]:
-        if assignments.get(nb) == TileState.FLOWER:
-            if not check_flower_safety(nb, tile_info, assignments):
-                # Would expose a flower — rollback
-                assignments[pos] = saved_states[pos]  # type: ignore[assignment]
-                return False
-
-    # Convert to flower
     assignments[pos] = TileState.FLOWER
 
     # Find shield positions needed for the new flower
@@ -340,25 +372,16 @@ def _try_convert_beehouse_to_flower(
         if tt is None:
             continue  # map edge
         if tt not in BEEHOUSE_TILES:
-            # Can't shield — rollback
-            for p, s in saved_states.items():
-                if s is None:
-                    assignments.pop(p, None)
-                else:
-                    assignments[p] = s
-            return False
+            _rollback(assignments, changeset)
+            return None
         state = assignments.get(nb, TileState.EMPTY)
         if state == TileState.BEEHOUSE or state == TileState.FLOWER:
             continue
         if state != TileState.EMPTY:
-            for p, s in saved_states.items():
-                if s is None:
-                    assignments.pop(p, None)
-                else:
-                    assignments[p] = s
-            return False
+            _rollback(assignments, changeset)
+            return None
         shield_needed.append(nb)
-        saved_states[nb] = assignments.get(nb)
+        changeset[nb] = assignments.get(nb)
 
     # Place shield beehouses
     for sp in shield_needed:
@@ -366,23 +389,15 @@ def _try_convert_beehouse_to_flower(
 
     # Validate flower safety
     if not check_flower_safety(pos, tile_info, assignments):
-        for p, s in saved_states.items():
-            if s is None:
-                assignments.pop(p, None)
-            else:
-                assignments[p] = s
-        return False
+        _rollback(assignments, changeset)
+        return None
 
     # Validate new beehouse accessibility
     for sp in shield_needed:
         access = classify_beehouse_access(sp, tile_info, assignments)
         if access is None or (no_hard and access == "hard"):
-            for p, s in saved_states.items():
-                if s is None:
-                    assignments.pop(p, None)
-                else:
-                    assignments[p] = s
-            return False
+            _rollback(assignments, changeset)
+            return None
 
     # Check adjacent existing beehouses still accessible
     all_changed = {pos} | set(shield_needed)
@@ -391,23 +406,15 @@ def _try_convert_beehouse_to_flower(
             if nb not in all_changed and assignments.get(nb) == TileState.BEEHOUSE:
                 access = classify_beehouse_access(nb, tile_info, assignments)
                 if access is None or (no_hard and access == "hard"):
-                    for p, s in saved_states.items():
-                        if s is None:
-                            assignments.pop(p, None)
-                        else:
-                            assignments[p] = s
-                    return False
+                    _rollback(assignments, changeset)
+                    return None
 
-    # Validate connectivity
-    if not check_connectivity(tile_info, assignments):
-        for p, s in saved_states.items():
-            if s is None:
-                assignments.pop(p, None)
-            else:
-                assignments[p] = s
-        return False
+    # Validate connectivity (shield positions became non-walkable; pos was already occupied)
+    if not check_connectivity(tile_info, assignments, removed_walkable=set(shield_needed)):
+        _rollback(assignments, changeset)
+        return None
 
-    return True
+    return changeset
 
 
 def _quick_score(
@@ -475,29 +482,26 @@ def anneal(
         if temp < MIN_TEMP:
             temp = INITIAL_TEMP  # reheat
 
-        # Save state for rollback
-        saved = dict(assignments)
-
-        # Pick a random move
+        # Pick a random move (each returns changeset on success, None on failure)
         move = random.choices(move_names, weights=move_weights, k=1)[0]
 
-        success = True
+        changeset = None
         if move == "add_beehouse":
-            success = _try_add_beehouse(tile_info, assignments, no_hard=no_hard) is not None
+            changeset = _try_add_beehouse(tile_info, assignments, no_hard=no_hard)
         elif move == "remove_beehouse":
-            success = _try_remove_beehouse(tile_info, assignments) is not None
+            changeset = _try_remove_beehouse(tile_info, assignments)
         elif move == "add_flower_cluster":
-            success = _try_add_flower_cluster(tile_info, assignments, no_hard=no_hard)
+            changeset = _try_add_flower_cluster(tile_info, assignments, no_hard=no_hard)
         elif move == "add_multi_flower_cluster":
-            success = _try_add_multi_flower_cluster(tile_info, assignments, no_hard=no_hard)
+            changeset = _try_add_multi_flower_cluster(tile_info, assignments, no_hard=no_hard)
         elif move == "convert_beehouse_to_flower":
-            success = _try_convert_beehouse_to_flower(tile_info, assignments, no_hard=no_hard)
+            changeset = _try_convert_beehouse_to_flower(tile_info, assignments, no_hard=no_hard)
         elif move == "remove_flower":
-            success = _try_remove_flower(tile_info, assignments) is not None
+            changeset = _try_remove_flower(tile_info, assignments)
         elif move == "move_flower":
-            success = _try_move_flower(tile_info, assignments)
+            changeset = _try_move_flower(tile_info, assignments, no_hard=no_hard)
 
-        if not success:
+        if changeset is None:
             iterations += 1
             temp *= COOLING_RATE
             continue
@@ -519,9 +523,8 @@ def anneal(
                     solution = score_solution(tile_info, best_assignments, tour_steps)
                     on_improvement(solution)
         else:
-            # Rollback
-            assignments.clear()
-            assignments.update(saved)
+            # Rollback using targeted changeset instead of full dict copy
+            _rollback(assignments, changeset)
 
         iterations += 1
         temp *= COOLING_RATE

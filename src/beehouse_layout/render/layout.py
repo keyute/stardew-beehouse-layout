@@ -14,7 +14,6 @@ from beehouse_layout.constants import (
     GRAVEL_PATH_SPRITE,
     POT_SPRITE,
     TALL_SPRITES,
-    TILE_COLORS,
     TILE_POT,
     TILE_SIZE,
     TILE_SOIL,
@@ -25,8 +24,6 @@ from beehouse_layout.solver.types import Solution, TileState
 
 # Metrics bar height
 METRICS_BAR_HEIGHT = 60
-# Legend bar height
-LEGEND_BAR_HEIGHT = 40
 # Extra vertical space for tall sprites (beehouses) at the top row
 TOP_PADDING = TILE_SIZE
 
@@ -47,11 +44,6 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> Image.Image:
     except (OSError, AttributeError):
         font = ImageFont.load_default()
 
-    try:
-        font_small = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 14)
-    except (OSError, AttributeError):
-        font_small = ImageFont.load_default()
-
     # Pre-calculate metrics text width
     metrics_text = (
         f"Beehouses: {solution.beehouse_count}  |  "
@@ -62,28 +54,10 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> Image.Image:
     metrics_bbox = font.getbbox(metrics_text)
     metrics_w = metrics_bbox[2] - metrics_bbox[0]
 
-    # Pre-calculate legend bar width
-    legend_items = [
-        ("Path", TILE_COLORS["path"]),
-        ("Pot", TILE_COLORS["pot"]),
-        ("Soil", TILE_COLORS["soil"]),
-        ("Entrance", TILE_COLORS["entrance"]),
-        ("Walkway", TILE_COLORS["walkway"]),
-        ("Obstacle", TILE_COLORS["obstacle"]),
-        ("Interactable", TILE_COLORS["interactable"]),
-    ]
-    swatch_size = 16
-    padding = 12
-    legend_w = 0
-    for label, _ in legend_items:
-        label_bbox = font_small.getbbox(label)
-        legend_w += swatch_size + 4 + (label_bbox[2] - label_bbox[0]) + padding
-    legend_w -= padding
-
-    # Ensure image is wide enough for grid, metrics, and legend
+    # Ensure image is wide enough for grid and metrics
     content_padding = 20
-    img_w = max(width * TILE_SIZE, metrics_w + content_padding, legend_w + content_padding)
-    img_h = TOP_PADDING + height * TILE_SIZE + METRICS_BAR_HEIGHT + LEGEND_BAR_HEIGHT
+    img_w = max(width * TILE_SIZE, metrics_w + content_padding)
+    img_h = TOP_PADDING + height * TILE_SIZE + METRICS_BAR_HEIGHT
 
     image = Image.new("RGBA", (img_w, img_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
@@ -167,24 +141,6 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> Image.Image:
     text_y = bar_y + (METRICS_BAR_HEIGHT - text_h) // 2
 
     draw.text((text_x, text_y), metrics_text, fill=(255, 255, 255, 255), font=font)
-
-    # Pass 6: Draw legend bar
-    legend_y = bar_y + METRICS_BAR_HEIGHT
-    draw.rectangle(
-        [0, legend_y, img_w, legend_y + LEGEND_BAR_HEIGHT],
-        fill=(30, 30, 30, 230),
-    )
-
-    lx = (img_w - legend_w) // 2
-    ly = legend_y + (LEGEND_BAR_HEIGHT - swatch_size) // 2
-
-    for label, color in legend_items:
-        draw.rectangle([lx, ly, lx + swatch_size, ly + swatch_size], fill=color)
-        lx += swatch_size + 4
-        label_bbox = draw.textbbox((0, 0), label, font=font_small)
-        label_h = label_bbox[3] - label_bbox[1]
-        draw.text((lx, ly + (swatch_size - label_h) // 2), label, fill=(200, 200, 200, 255), font=font_small)
-        lx += (label_bbox[2] - label_bbox[0]) + padding
 
     return image
 

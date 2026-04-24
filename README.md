@@ -30,12 +30,24 @@ without improvement. Outputs are saved incrementally as better solutions are fou
 uv run beehouse optimize maps/ginger_island_west_left_bottom.yml
 ```
 
-Options:
+You can view the available flags via the `--help` flag
 
-- `--duration N` — stop after N seconds (default: unlimited)
-- `--workers N` — number of parallel workers (default: CPU count)
-- `--stagnation N` — auto-stop after N seconds without improvement (default: 60, 0 to disable)
-- `--no-hard` — reject solutions with hard-to-access beehouses (near interactable obstacles)
+```sh
+$ uv run beehouse optimize --help
+Usage: beehouse optimize [OPTIONS] MAP_FILE
+
+  Calculate optimal beehouse layout.
+
+Options:
+  --duration INTEGER    Optimization duration in seconds (0 = unlimited).
+  --workers INTEGER     Number of parallel SA processes.
+  --stagnation INTEGER  Auto-stop after N seconds without improvement (0 =
+                        disabled).
+  --no-hard             Reject solutions with hard-to-access beehouses (near
+                        interactable obstacles).
+  --route               Generate route overlay images alongside layouts.
+  --help                Show this message and exit.
+```
 
 ## Map format
 
@@ -77,9 +89,13 @@ Any valid layout must satisfy all of these constraints:
 - **Pluck prevention**: No flower may be adjacent to a walkable tile in any of the 8 directions (prevents accidental
   pickup). Flowers must be shielded on all 8 sides by beehouses, obstacles, other flowers, or the map edge
 - **Beehouse accessibility**: Every beehouse must have at least one walkable tile within 8-directional adjacency.
-  Beehouses only reachable via diagonal with an interactable obstacle nearby are penalized (risk of accidental
-  interaction on controller). Non-interactable obstacles do not incur a penalty. Use `--no-hard` to reject any solution
-  with penalized beehouses
+  Access is classified by checking all 8 directions for the best available approach:
+  - **Easy**: at least one cardinal (N/S/E/W) walkable neighbor — player walks straight to it
+  - **OK**: diagonal-only access, but no interactable obstacle on the squeeze tiles
+  - **Hard**: diagonal-only access where every available diagonal has an interactable obstacle (chest, machine) on at
+    least one of the two squeeze tiles between the player and the beehouse — risks accidental interaction on controller.
+    Non-interactable obstacles (rocks, walls) do not trigger this penalty
+  - Use `--no-hard` to reject any solution containing hard-access beehouses
 - **Entrance connectivity**: Every entrance tile must have at least one cardinal neighbor that is a path, entrance, or
   walkway tile
 - **Connectivity**: All beehouses must be reachable from an entrance tile via cardinal-direction walkable paths

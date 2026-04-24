@@ -28,16 +28,21 @@ STONE_SPRITE = "stone.png"
 GRAVEL_PATH_SPRITE = "gravel_path.png"
 CHEST_SPRITE = "chest.png"
 BRICK_FLOOR_SPRITE = "brick_floor.png"
+STONE_FLOOR_SPRITE = "stone_floor.png"
+CRYSTAL_FLOOR_SPRITE = "crystal_floor.png"
 
 # Floor-level sprites (1-tile, no Y-sorting needed)
 FLOOR_SPRITES: dict[str, str] = {
-    TILE_OBSTACLE: STONE_SPRITE,
+    TILE_ENTRANCE: CRYSTAL_FLOOR_SPRITE,
     TILE_WALKWAY: BRICK_FLOOR_SPRITE,
+    TILE_OBSTACLE: STONE_FLOOR_SPRITE,
+    TILE_INTERACTABLE: STONE_FLOOR_SPRITE,
 }
 DEFAULT_FLOOR_SPRITE = FLOOR_SPRITE
 
 # Tall sprites (bottom-aligned, Y-sorted) — map tile types and solution states
 TALL_SPRITES: dict[str, str] = {
+    TILE_OBSTACLE: STONE_SPRITE,
     TILE_INTERACTABLE: CHEST_SPRITE,
     "beehouse": BEEHOUSE_SPRITE,
 }
