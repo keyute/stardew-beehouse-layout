@@ -72,7 +72,7 @@ map: |
 Each character in the map grid corresponds to a tile type defined in the legend.
 
 | Type           | Description                                                            |
-|----------------|------------------------------------------------------------------------|
+| -------------- | ---------------------------------------------------------------------- |
 | `path`         | Walkable tile, can place beehouses                                     |
 | `pot`          | Walkable tile, can place beehouses or flowers (garden pot, expensive)  |
 | `soil`         | Walkable tile, can place beehouses or flowers (direct planting, cheap) |
@@ -90,13 +90,13 @@ Any valid layout must satisfy all of these constraints:
   pickup). Flowers must be shielded on all 8 sides by beehouses, obstacles, other flowers, or the map edge
 - **Beehouse accessibility**: Every beehouse must have at least one walkable tile within 8-directional adjacency.
   Access is classified by checking all 8 directions for the best available approach:
-    - **Easy**: at least one cardinal (N/S/E/W) walkable neighbor — player walks straight to it
-    - **OK**: diagonal-only access, but no interactable obstacle on the squeeze tiles
-    - **Hard**: diagonal-only access where every available diagonal has an interactable obstacle (chest, machine) on at
-      least one of the two squeeze tiles between the player and the beehouse — risks accidental interaction on
-      controller.
-      Non-interactable obstacles (rocks, walls) do not trigger this penalty
-    - Use `--no-hard` to reject any solution containing hard-access beehouses
+  - **Easy**: at least one cardinal (N/S/E/W) walkable neighbor — player walks straight to it
+  - **OK**: diagonal-only access, but no interactable obstacle on the squeeze tiles
+  - **Hard**: diagonal-only access where every available diagonal has an interactable obstacle (chest, machine) on at
+    least one of the two squeeze tiles between the player and the beehouse — risks accidental interaction on
+    controller.
+    Non-interactable obstacles (rocks, walls) do not trigger this penalty
+  - Use `--no-hard` to reject any solution containing hard-access beehouses
 - **Entrance connectivity**: Every entrance tile must have at least one cardinal neighbor that is a path, entrance, or
   walkway tile
 - **Connectivity**: All beehouses must be reachable from an entrance tile via cardinal-direction walkable paths
@@ -112,3 +112,8 @@ If you have any questions or suggestions, feel free to open issues. If you have 
 want implemented, please implement it yourself and open a pull request and I will review it. Please do not open an
 issue or pull request if the content is not meaningful and can be better served with tutorials that is readily available
 online.
+
+## Attributions
+
+All assets are fetched from the Stardew Valley wiki.
+
