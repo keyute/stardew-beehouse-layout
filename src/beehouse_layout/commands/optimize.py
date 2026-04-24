@@ -9,6 +9,7 @@ from pathlib import Path
 
 import click
 
+from beehouse_layout.commands.constants import OUTPUT_DIR
 from beehouse_layout.map.parser import parse_map
 from beehouse_layout.render.dashboard import Dashboard
 from beehouse_layout.render.layout import render_layout, save_layout
@@ -21,6 +22,8 @@ from beehouse_layout.solver.types import Solution, WorkerStatus
 from beehouse_layout.solver.constraints import check_entrance_connectivity
 from beehouse_layout.solver.validator import cleanup_assignments, validate_solution
 from beehouse_layout.solver.greedy import build_greedy
+
+MAX_SEED = 2**63
 
 
 def _slugify(name: str) -> str:
@@ -36,7 +39,7 @@ def _output_path(map_name: str, solution: Solution) -> str:
         f"{solution.pot_count}pt_"
         f"{solution.tour_steps}st"
     )
-    base = Path("outputs") / slug / filename
+    base = OUTPUT_DIR / slug / filename
     path = base.with_suffix(".png")
 
     # Handle duplicate names
@@ -156,7 +159,7 @@ def _run_parallel(
     processes: list[multiprocessing.Process] = []
 
     for i in range(workers):
-        seed = random.randint(0, 2**63)
+        seed = random.randint(0, MAX_SEED)
         p = multiprocessing.Process(
             target=_sa_worker,
             args=(tile_info, assignments, sa_duration, seed, i, result_queue, stop_event),
@@ -252,7 +255,7 @@ def optimize(map_file: str, duration: int, workers: int, stagnation: int, no_har
         dashboard.log(f"Map: {map_data.name}")
 
         # Clear previous outputs for this map
-        output_dir = Path("outputs") / _slugify(map_data.name)
+        output_dir = OUTPUT_DIR / _slugify(map_data.name)
         if output_dir.exists():
             shutil.rmtree(output_dir)
             dashboard.log(f"Cleared {output_dir}/")
@@ -305,7 +308,7 @@ def optimize(map_file: str, duration: int, workers: int, stagnation: int, no_har
         )
 
         # Always save best layout on exit (including Ctrl+C)
-        best_path = str(Path("outputs") / _slugify(map_data.name) / "best_layout.png")
+        best_path = str(OUTPUT_DIR / _slugify(map_data.name) / "best_layout.png")
         best_image, best_top_padding = render_layout(tile_info, best)
         save_layout(best_image, best_path)
         if route:

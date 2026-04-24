@@ -9,6 +9,9 @@ from beehouse_layout.solver.constants import CARDINAL_OFFSETS
 from beehouse_layout.solver.tile_info import TileInfo, get_walkable_set
 from beehouse_layout.solver.types import TileState
 
+# Max tour stops before skipping 2-opt improvement (too expensive)
+TWO_OPT_MAX_STOPS = 50
+
 
 @dataclass
 class TourPath:
@@ -254,7 +257,7 @@ def optimize_tour(
         return 0
 
     # For small enough tours, build distance matrix and run 2-opt
-    if len(stops) <= 50:
+    if len(stops) <= TWO_OPT_MAX_STOPS:
         all_points = [best_entrance] + stops
         dist_matrix: dict[tuple[int, int], dict[tuple[int, int], int]] = {}
         for p in all_points:

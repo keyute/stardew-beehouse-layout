@@ -14,6 +14,10 @@ from beehouse_layout.solver.constraints import (
 from beehouse_layout.solver.tile_info import TileInfo
 from beehouse_layout.solver.types import TileState
 
+# Greedy solver parameters
+MIN_FLOWER_GROUP_SIZE = 2
+MAX_SHRINK_ATTEMPTS = 10
+
 
 def _can_shield_flower(
     pos: tuple[int, int],
@@ -270,15 +274,15 @@ def build_greedy(tile_info: TileInfo, *, no_hard: bool = False) -> dict[tuple[in
     components = _find_flower_components(tile_info, assignments)
     for component in sorted(components, key=len, reverse=True):
         filtered = _filter_shieldable(component, tile_info, assignments)
-        if len(filtered) < 2:
+        if len(filtered) < MIN_FLOWER_GROUP_SIZE:
             continue
         # Try placing the full filtered group
         if _try_place_flower_group(filtered, tile_info, assignments, no_hard=no_hard):
             continue
         # Shrink by removing periphery tiles (fewest in-group neighbors) and retry
         shrinkable = set(filtered)
-        for _ in range(min(10, len(shrinkable))):
-            if len(shrinkable) < 2:
+        for _ in range(min(MAX_SHRINK_ATTEMPTS, len(shrinkable))):
+            if len(shrinkable) < MIN_FLOWER_GROUP_SIZE:
                 break
             # Remove tile with fewest in-group neighbors
             worst = min(

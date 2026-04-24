@@ -6,6 +6,9 @@ from collections import deque
 
 from beehouse_layout.constants import WALKABLE_TILES
 from beehouse_layout.solver.constants import ALL_OFFSETS, CARDINAL_OFFSETS
+
+# Max BFS steps for fast connectivity heuristic before falling back to full BFS
+CONNECTIVITY_BFS_LIMIT = 50
 from beehouse_layout.solver.tile_info import TileInfo, get_walkable_set, is_walkable
 from beehouse_layout.solver.types import TileState
 
@@ -137,7 +140,7 @@ def _check_connectivity_fast(
     queue = deque([start])
     steps = 0
 
-    while queue and targets and steps < 50:
+    while queue and targets and steps < CONNECTIVITY_BFS_LIMIT:
         current = queue.popleft()
         steps += 1
         for nb in tile_info.cardinal_neighbors[current]:

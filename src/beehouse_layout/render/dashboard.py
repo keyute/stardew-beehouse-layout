@@ -12,17 +12,21 @@ from rich.text import Text
 from beehouse_layout.solver.types import Solution, WorkerStatus
 
 
+LOG_BUFFER_SIZE = 15
+REFRESH_PER_SECOND = 2
+
+
 class Dashboard:
     def __init__(self, num_workers: int) -> None:
         self._console = Console()
-        self._recent_logs: deque[str] = deque(maxlen=15)
+        self._recent_logs: deque[str] = deque(maxlen=LOG_BUFFER_SIZE)
         self._worker_statuses: dict[int, WorkerStatus] = {}
         self._best = Solution()
         self._num_workers = num_workers
         self._highlighter = ReprHighlighter()
 
     def __enter__(self) -> Dashboard:
-        self._live = Live(self._build(), console=self._console, refresh_per_second=2)
+        self._live = Live(self._build(), console=self._console, refresh_per_second=REFRESH_PER_SECOND)
         self._live.__enter__()
         return self
 

@@ -29,6 +29,22 @@ MIN_TEMP = 0.01
 REPORT_INTERVAL_SECS = 2
 CLEANUP_INTERVAL = 5000
 
+# Multi-flower cluster size bounds
+MULTI_FLOWER_MIN = 2
+MULTI_FLOWER_MAX = 4
+
+# Move selection weights for SA
+SA_MOVES = [
+    ("add_beehouse", 0.25),
+    ("remove_beehouse", 0.10),
+    ("add_flower_cluster", 0.10),
+    ("add_multi_flower_cluster", 0.15),
+    ("convert_beehouse_to_flower", 0.15),
+    ("remove_flower", 0.05),
+    ("move_flower", 0.20),
+    ("swap_beehouse", 0.10),
+]
+
 
 def _cascade_remove_unsafe(
     tile_info: TileInfo,
@@ -312,7 +328,7 @@ def _try_add_multi_flower_cluster(
     # Random walk to find 1-3 more adjacent empty flower-eligible tiles
     group = {seed}
     frontier = [seed]
-    target_size = random.randint(2, 4)
+    target_size = random.randint(MULTI_FLOWER_MIN, MULTI_FLOWER_MAX)
     while len(group) < target_size and frontier:
         pos = random.choice(frontier)
         neighbors = [
@@ -542,18 +558,8 @@ def anneal(
     iterations = 0
     improvements = 0
 
-    moves = [
-        ("add_beehouse", 0.25),
-        ("remove_beehouse", 0.10),
-        ("add_flower_cluster", 0.10),
-        ("add_multi_flower_cluster", 0.15),
-        ("convert_beehouse_to_flower", 0.15),
-        ("remove_flower", 0.05),
-        ("move_flower", 0.20),
-        ("swap_beehouse", 0.10),
-    ]
-    move_names = [m[0] for m in moves]
-    move_weights = [m[1] for m in moves]
+    move_names = [m[0] for m in SA_MOVES]
+    move_weights = [m[1] for m in SA_MOVES]
 
     while True:
         elapsed = time.monotonic() - start_time
