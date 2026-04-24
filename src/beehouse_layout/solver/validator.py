@@ -15,6 +15,8 @@ from beehouse_layout.solver.types import TileState
 def validate_solution(
     tile_info: TileInfo,
     assignments: dict[tuple[int, int], TileState],
+    *,
+    no_hard: bool = False,
 ) -> list[str]:
     """Validate all constraints. Returns list of violation descriptions."""
     violations: list[str] = []
@@ -28,6 +30,8 @@ def validate_solution(
             access = classify_beehouse_access(pos, tile_info, assignments)
             if access is None:
                 violations.append(f"Beehouse at {pos} is inaccessible")
+            elif no_hard and access == "hard":
+                violations.append(f"Beehouse at {pos} has hard access (--no-hard)")
 
         elif state == TileState.FLOWER:
             if pos not in tile_info.flower_tiles:

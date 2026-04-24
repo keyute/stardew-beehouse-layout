@@ -8,13 +8,13 @@ from PIL import Image, ImageDraw, ImageFont
 
 from beehouse_layout.constants import (
     ASSET_DIR,
-    BEEHOUSE_SPRITE,
-    FLOOR_SPRITE,
+    DEFAULT_FLOOR_SPRITE,
+    FLOOR_SPRITES,
     FLOWER_SPRITE,
     GRAVEL_PATH_SPRITE,
     POT_SPRITE,
-    STONE_SPRITE,
-    TILE_OBSTACLE,
+    TALL_SPRITES,
+    TILE_COLORS,
     TILE_POT,
     TILE_SIZE,
     TILE_SOIL,
@@ -25,6 +25,8 @@ from beehouse_layout.solver.types import Solution, TileState
 
 # Metrics bar height
 METRICS_BAR_HEIGHT = 60
+# Legend bar height
+LEGEND_BAR_HEIGHT = 40
 # Extra vertical space for tall sprites (beehouses) at the top row
 TOP_PADDING = TILE_SIZE
 
@@ -39,29 +41,72 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> Image.Image:
     width = tile_info.width
     height = tile_info.height
 
-    img_w = width * TILE_SIZE
-    img_h = TOP_PADDING + height * TILE_SIZE + METRICS_BAR_HEIGHT
+    # Load fonts early so we can measure text before creating the image
+    try:
+        font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 20)
+    except (OSError, AttributeError):
+        font = ImageFont.load_default()
+
+    try:
+        font_small = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 14)
+    except (OSError, AttributeError):
+        font_small = ImageFont.load_default()
+
+    # Pre-calculate metrics text width
+    metrics_text = (
+        f"Beehouses: {solution.beehouse_count}  |  "
+        f"Flowers: {solution.flower_count} ({solution.pot_count} garden pots)  |  "
+        f"Steps: {solution.tour_steps}  |  "
+        f"Hard collect: {solution.obstacle_diagonal_count}"
+    )
+    metrics_bbox = font.getbbox(metrics_text)
+    metrics_w = metrics_bbox[2] - metrics_bbox[0]
+
+    # Pre-calculate legend bar width
+    legend_items = [
+        ("Path", TILE_COLORS["path"]),
+        ("Pot", TILE_COLORS["pot"]),
+        ("Soil", TILE_COLORS["soil"]),
+        ("Entrance", TILE_COLORS["entrance"]),
+        ("Walkway", TILE_COLORS["walkway"]),
+        ("Obstacle", TILE_COLORS["obstacle"]),
+        ("Interactable", TILE_COLORS["interactable"]),
+    ]
+    swatch_size = 16
+    padding = 12
+    legend_w = 0
+    for label, _ in legend_items:
+        label_bbox = font_small.getbbox(label)
+        legend_w += swatch_size + 4 + (label_bbox[2] - label_bbox[0]) + padding
+    legend_w -= padding
+
+    # Ensure image is wide enough for grid, metrics, and legend
+    content_padding = 20
+    img_w = max(width * TILE_SIZE, metrics_w + content_padding, legend_w + content_padding)
+    img_h = TOP_PADDING + height * TILE_SIZE + METRICS_BAR_HEIGHT + LEGEND_BAR_HEIGHT
 
     image = Image.new("RGBA", (img_w, img_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
 
     # Load sprites
-    beehouse_sprite = _load_sprite(BEEHOUSE_SPRITE)
     flower_sprite = _load_sprite(FLOWER_SPRITE)
-    floor_sprite = _load_sprite(FLOOR_SPRITE)
     pot_sprite = _load_sprite(POT_SPRITE)
-    stone_sprite = _load_sprite(STONE_SPRITE)
     gravel_path_sprite = _load_sprite(GRAVEL_PATH_SPRITE)
+    default_floor = _load_sprite(DEFAULT_FLOOR_SPRITE)
+    floor_sprite_cache = {name: _load_sprite(name) for name in FLOOR_SPRITES.values()}
+    tall_sprite_cache = {name: _load_sprite(name) for name in TALL_SPRITES.values()}
 
-    # Pass 1: Base textures (wood floor on walkable, stone on obstacles)
+    # Pass 1: Floor textures (data-driven)
     for pos, tt in tile_info.tile_type.items():
         x, y = pos
         x0 = x * TILE_SIZE
         y0 = TOP_PADDING + y * TILE_SIZE
-        if tt == TILE_OBSTACLE:
-            image.paste(stone_sprite, (x0, y0), stone_sprite)
+        floor_name = FLOOR_SPRITES.get(tt)
+        if floor_name:
+            sprite = floor_sprite_cache[floor_name]
+            image.paste(sprite, (x0, y0), sprite)
         elif tt in WALKABLE_TILES:
-            image.paste(floor_sprite, (x0, y0), floor_sprite)
+            image.paste(default_floor, (x0, y0), default_floor)
 
     # Pass 2: Gravel path under ground-planted flowers
     for pos, state in solution.assignments.items():
@@ -89,18 +134,24 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> Image.Image:
         else:
             image.paste(flower_sprite, (x0, y0), flower_sprite)
 
-    # Pass 4: Beehouses (Y-sorted for correct overlap of 2-tile tall sprites)
-    bh_y_offset = -(beehouse_sprite.size[1] - TILE_SIZE)
+    # Pass 4: Tall objects (unified Y-sorted pass for map tiles and solution objects)
+    tall_objects: list[tuple[int, int, Image.Image]] = []
 
-    beehouse_positions = sorted(
-        (pos for pos, state in solution.assignments.items() if state == TileState.BEEHOUSE),
-        key=lambda p: p[1],
-    )
-    for pos in beehouse_positions:
-        x, y = pos
+    for pos, tt in tile_info.tile_type.items():
+        sprite_name = TALL_SPRITES.get(tt)
+        if sprite_name:
+            tall_objects.append((pos[0], pos[1], tall_sprite_cache[sprite_name]))
+
+    for pos, state in solution.assignments.items():
+        sprite_name = TALL_SPRITES.get(state.value)
+        if sprite_name:
+            tall_objects.append((pos[0], pos[1], tall_sprite_cache[sprite_name]))
+
+    tall_objects.sort(key=lambda o: o[1])
+    for x, y, sprite in tall_objects:
         x0 = x * TILE_SIZE
-        y0 = TOP_PADDING + y * TILE_SIZE + bh_y_offset
-        image.paste(beehouse_sprite, (x0, y0), beehouse_sprite)
+        y0 = TOP_PADDING + y * TILE_SIZE - (sprite.size[1] - TILE_SIZE)
+        image.paste(sprite, (x0, y0), sprite)
 
     # Pass 5: Draw metrics bar at bottom
     bar_y = TOP_PADDING + height * TILE_SIZE
@@ -109,19 +160,6 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> Image.Image:
         fill=(40, 40, 40, 230),
     )
 
-    metrics_text = (
-        f"Beehouses: {solution.beehouse_count}  |  "
-        f"Flowers: {solution.flower_count} ({solution.pot_count} garden pots)  |  "
-        f"Steps: {solution.tour_steps}  |  "
-        f"Hard collect: {solution.obstacle_diagonal_count}"
-    )
-
-    # Try to use a reasonable font size
-    try:
-        font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 20)
-    except (OSError, AttributeError):
-        font = ImageFont.load_default()
-
     bbox = draw.textbbox((0, 0), metrics_text, font=font)
     text_w = bbox[2] - bbox[0]
     text_h = bbox[3] - bbox[1]
@@ -129,6 +167,24 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> Image.Image:
     text_y = bar_y + (METRICS_BAR_HEIGHT - text_h) // 2
 
     draw.text((text_x, text_y), metrics_text, fill=(255, 255, 255, 255), font=font)
+
+    # Pass 6: Draw legend bar
+    legend_y = bar_y + METRICS_BAR_HEIGHT
+    draw.rectangle(
+        [0, legend_y, img_w, legend_y + LEGEND_BAR_HEIGHT],
+        fill=(30, 30, 30, 230),
+    )
+
+    lx = (img_w - legend_w) // 2
+    ly = legend_y + (LEGEND_BAR_HEIGHT - swatch_size) // 2
+
+    for label, color in legend_items:
+        draw.rectangle([lx, ly, lx + swatch_size, ly + swatch_size], fill=color)
+        lx += swatch_size + 4
+        label_bbox = draw.textbbox((0, 0), label, font=font_small)
+        label_h = label_bbox[3] - label_bbox[1]
+        draw.text((lx, ly + (swatch_size - label_h) // 2), label, fill=(200, 200, 200, 255), font=font_small)
+        lx += (label_bbox[2] - label_bbox[0]) + padding
 
     return image
 

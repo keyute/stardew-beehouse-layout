@@ -35,6 +35,7 @@ Options:
 - `--duration N` — stop after N seconds (default: unlimited)
 - `--workers N` — number of parallel workers (default: CPU count)
 - `--stagnation N` — auto-stop after N seconds without improvement (default: 60, 0 to disable)
+- `--no-hard` — reject solutions with hard-to-access beehouses (near interactable obstacles)
 
 ## Map format
 
@@ -46,8 +47,10 @@ legend:
   ".": path
   P: pot
   X: obstacle
+  I: interactable
   S: soil
   E: entrance
+  W: walkway
 map: |
   .....PPXXXXXXXXPPP
   .....PPXXXXXXXXPPP
@@ -56,20 +59,29 @@ map: |
 
 Each character in the map grid corresponds to a tile type defined in the legend.
 
-| Type       | Description                                                            |
-|------------|------------------------------------------------------------------------|
-| `path`     | Walkable tile, can place beehouses                                     |
-| `pot`      | Walkable tile, can place beehouses or flowers (garden pot, expensive)  |
-| `soil`     | Walkable tile, can place beehouses or flowers (direct planting, cheap) |
-| `obstacle` | Impassable, cannot place anything                                      |
-| `entrance` | Always walkable, player starts here for collection tour                |
+| Type           | Description                                                            |
+|----------------|------------------------------------------------------------------------|
+| `path`         | Walkable tile, can place beehouses                                     |
+| `pot`          | Walkable tile, can place beehouses or flowers (garden pot, expensive)  |
+| `soil`         | Walkable tile, can place beehouses or flowers (direct planting, cheap) |
+| `obstacle`     | Impassable, cannot place anything (rocks, water, buildings, fences)    |
+| `interactable` | Impassable, cannot place anything (chests, machines — penalized)       |
+| `entrance`     | Always walkable, player starts here for collection tour                |
+| `walkway`      | Always walkable, permanent path — no placement allowed                 |
 
 ## Layout rules
 
 Any valid layout must satisfy all of these constraints:
 
 - **Flower range**: Every beehouse must have at least one fairy rose within Manhattan distance 5 (`|dx| + |dy| <= 5`)
-- **Pluck prevention**: No flower may be cardinally adjacent to a walkable tile (prevents accidental pickup on controller). Flowers must be shielded on all four cardinal sides by beehouses, obstacles, other flowers, or the map edge
-- **Beehouse accessibility**: Every beehouse must have at least one walkable tile within 8-directional adjacency. Beehouses only reachable via diagonal with an obstacle nearby are penalized (hard to select on controller)
+- **Pluck prevention**: No flower may be adjacent to a walkable tile in any of the 8 directions (prevents accidental
+  pickup). Flowers must be shielded on all 8 sides by beehouses, obstacles, other flowers, or the map edge
+- **Beehouse accessibility**: Every beehouse must have at least one walkable tile within 8-directional adjacency.
+  Beehouses only reachable via diagonal with an interactable obstacle nearby are penalized (risk of accidental
+  interaction on controller). Non-interactable obstacles do not incur a penalty. Use `--no-hard` to reject any solution
+  with penalized beehouses
+- **Entrance connectivity**: Every entrance tile must have at least one cardinal neighbor that is a path, entrance, or
+  walkway tile
 - **Connectivity**: All beehouses must be reachable from an entrance tile via cardinal-direction walkable paths
-- **Collection tour**: The optimizer minimizes the walking steps needed to visit every beehouse from an entrance and return, including backtracking through dead ends
+- **Collection tour**: The optimizer minimizes the walking steps needed to visit every beehouse from an entrance and
+  return, including backtracking through dead ends

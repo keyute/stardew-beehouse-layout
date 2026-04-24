@@ -7,7 +7,7 @@ from collections import deque
 from beehouse_layout.constants import (
     ALL_OFFSETS,
     CARDINAL_OFFSETS,
-    TILE_OBSTACLE,
+    WALKABLE_TILES,
 )
 from beehouse_layout.solver.tile_info import TileInfo, get_walkable_set, is_walkable
 from beehouse_layout.solver.types import TileState
@@ -30,8 +30,8 @@ def check_flower_safety(
     tile_info: TileInfo,
     assignments: dict[tuple[int, int], TileState],
 ) -> bool:
-    """Check that a flower at `pos` has no cardinally adjacent walkable tile."""
-    for nb in tile_info.cardinal_neighbors[pos]:
+    """Check that a flower at `pos` has no adjacent walkable tile (all 8 directions)."""
+    for nb in tile_info.all_neighbors[pos]:
         if is_walkable(nb, tile_info, assignments):
             return False
     return True
@@ -42,7 +42,12 @@ def classify_beehouse_access(
     tile_info: TileInfo,
     assignments: dict[tuple[int, int], TileState],
 ) -> str | None:
-    """Classify beehouse accessibility. Returns 'easy', 'ok', 'hard', or None (inaccessible)."""
+    """Classify beehouse accessibility. Returns 'easy', 'ok', 'hard', or None (inaccessible).
+
+    'hard' only applies when a diagonal-only walkable neighbor has an adjacent
+    interactable obstacle (chests, machines) — non-interactable obstacles (rocks,
+    walls) are not penalized.
+    """
     x, y = pos
     has_ok = False
     has_hard = False
@@ -56,12 +61,12 @@ def classify_beehouse_access(
         if dx == 0 or dy == 0:
             return "easy"
 
-        # Diagonal adjacency: check if walkable tile has cardinally adjacent obstacle
-        nb_has_obstacle = any(
-            tile_info.tile_type.get(cn) == TILE_OBSTACLE
+        # Diagonal adjacency: check if walkable tile has cardinally adjacent interactable
+        nb_has_interactable = any(
+            cn in tile_info.interactable_tiles
             for cn in tile_info.cardinal_neighbors.get(nb, [])
         )
-        if nb_has_obstacle:
+        if nb_has_interactable:
             has_hard = True
         else:
             has_ok = True
@@ -125,3 +130,22 @@ def check_connectivity(
             return False
 
     return True
+
+
+def check_entrance_connectivity(tile_info: TileInfo) -> list[str]:
+    """Check that every entrance has at least one cardinal neighbor that is walkable.
+
+    This is a static map validation check (independent of assignments).
+    Returns a list of violation descriptions (empty = OK).
+    """
+    violations: list[str] = []
+    for pos in tile_info.entrance_tiles:
+        has_connectable = any(
+            tile_info.tile_type.get(nb) in WALKABLE_TILES
+            for nb in tile_info.cardinal_neighbors[pos]
+        )
+        if not has_connectable:
+            violations.append(
+                f"Entrance at {pos} has no adjacent walkable tile"
+            )
+    return violations

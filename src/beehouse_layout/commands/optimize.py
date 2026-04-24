@@ -12,11 +12,13 @@ import click
 from beehouse_layout.map.parser import parse_map
 from beehouse_layout.render.dashboard import Dashboard
 from beehouse_layout.render.layout import render_layout, save_layout
+from beehouse_layout.render.route import render_route
 from beehouse_layout.solver.annealing import anneal
 from beehouse_layout.solver.scoring import score_solution
 from beehouse_layout.solver.tile_info import TileInfo, precompute
-from beehouse_layout.solver.tour import optimize_tour
+from beehouse_layout.solver.tour import compute_tour_path, optimize_tour
 from beehouse_layout.solver.types import Solution, WorkerStatus
+from beehouse_layout.solver.constraints import check_entrance_connectivity
 from beehouse_layout.solver.validator import cleanup_assignments, validate_solution
 from beehouse_layout.solver.greedy import build_greedy
 
@@ -46,14 +48,21 @@ def _output_path(map_name: str, solution: Solution) -> str:
     return str(path)
 
 
-def _validate_and_save(tile_info: TileInfo, solution: Solution, map_name: str) -> str | None:
+def _validate_and_save(
+    tile_info: TileInfo, solution: Solution, map_name: str, *, no_hard: bool = False, route: bool = False,
+) -> str | None:
     """Validate a solution, save if valid, return path or None."""
-    violations = validate_solution(tile_info, solution.assignments)
+    violations = validate_solution(tile_info, solution.assignments, no_hard=no_hard)
     if violations:
         return None
     image = render_layout(tile_info, solution)
     path = _output_path(map_name, solution)
     save_layout(image, path)
+    if route:
+        tour_path = compute_tour_path(tile_info, solution.assignments)
+        if tour_path.tiles:
+            route_image = render_route(image, tour_path)
+            save_layout(route_image, path.replace(".png", "_route.png"))
     return path
 
 
@@ -62,6 +71,9 @@ def _process_improvement(
     solution: Solution,
     best_so_far: Solution,
     map_name: str,
+    *,
+    no_hard: bool = False,
+    route: bool = False,
 ) -> tuple[Solution, str | None]:
     """Clean up, validate, and save an improvement. Returns (updated best, message or None)."""
     clean_assignments = dict(solution.assignments)
@@ -72,7 +84,7 @@ def _process_improvement(
     if solution.score <= best_so_far.score:
         return best_so_far, None
 
-    path = _validate_and_save(tile_info, solution, map_name)
+    path = _validate_and_save(tile_info, solution, map_name, no_hard=no_hard, route=route)
     if path:
         msg = (
             f"  {solution.beehouse_count} bh, "
@@ -92,6 +104,8 @@ def _sa_worker(
     worker_id: int,
     result_queue: multiprocessing.Queue,
     stop_event: multiprocessing.Event,
+    *,
+    no_hard: bool = False,
 ) -> None:
     """SA worker process. Sends improvements and status to the queue."""
     random.seed(seed)
@@ -117,6 +131,7 @@ def _sa_worker(
             on_improvement=on_improvement,
             on_progress=on_progress,
             stop_event=stop_event,
+            no_hard=no_hard,
         )
     except KeyboardInterrupt:
         pass
@@ -131,6 +146,9 @@ def _run_parallel(
     workers: int,
     stagnation: int,
     dashboard: Dashboard,
+    *,
+    no_hard: bool = False,
+    route: bool = False,
 ) -> Solution:
     """Run SA across multiple processes with a live dashboard."""
     result_queue: multiprocessing.Queue = multiprocessing.Queue()
@@ -142,6 +160,7 @@ def _run_parallel(
         p = multiprocessing.Process(
             target=_sa_worker,
             args=(tile_info, assignments, sa_duration, seed, i, result_queue, stop_event),
+            kwargs={"no_hard": no_hard},
         )
         p.start()
         processes.append(p)
@@ -154,7 +173,7 @@ def _run_parallel(
             dashboard.update_worker(msg)
         elif isinstance(msg, Solution):
             new_best, improvement_msg = _process_improvement(
-                tile_info, msg, best_so_far, map_name,
+                tile_info, msg, best_so_far, map_name, no_hard=no_hard, route=route,
             )
             if new_best.score > best_so_far.score:
                 best_so_far = new_best
@@ -213,7 +232,19 @@ def _run_parallel(
     type=int,
     help="Auto-stop after N seconds without improvement (0 = disabled).",
 )
-def optimize(map_file: str, duration: int, workers: int, stagnation: int) -> None:
+@click.option(
+    "--no-hard",
+    is_flag=True,
+    default=False,
+    help="Reject solutions with hard-to-access beehouses (near interactable obstacles).",
+)
+@click.option(
+    "--route",
+    is_flag=True,
+    default=False,
+    help="Generate route overlay images alongside layouts.",
+)
+def optimize(map_file: str, duration: int, workers: int, stagnation: int, no_hard: bool, route: bool) -> None:
     """Calculate optimal beehouse layout."""
     map_data = parse_map(map_file)
 
@@ -227,6 +258,12 @@ def optimize(map_file: str, duration: int, workers: int, stagnation: int) -> Non
             dashboard.log(f"Cleared {output_dir}/")
 
         tile_info = precompute(map_data)
+
+        # Validate entrance connectivity
+        entrance_violations = check_entrance_connectivity(tile_info)
+        for v in entrance_violations:
+            dashboard.log(f"  WARNING: {v}")
+
         dashboard.log(
             f"Tiles: {len(tile_info.beehouse_tiles)} beehouse-eligible, "
             f"{len(tile_info.flower_tiles)} flower-eligible, "
@@ -234,12 +271,12 @@ def optimize(map_file: str, duration: int, workers: int, stagnation: int) -> Non
         )
 
         dashboard.log("Greedy construction...")
-        assignments = build_greedy(tile_info)
+        assignments = build_greedy(tile_info, no_hard=no_hard)
         cleanup_assignments(tile_info, assignments)
         tour_steps = optimize_tour(tile_info, assignments)
         greedy_solution = score_solution(tile_info, assignments, tour_steps)
 
-        path = _validate_and_save(tile_info, greedy_solution, map_data.name)
+        path = _validate_and_save(tile_info, greedy_solution, map_data.name, no_hard=no_hard, route=route)
         if path:
             dashboard.log(
                 f"  Greedy: {greedy_solution.beehouse_count} bh, "
@@ -264,13 +301,18 @@ def optimize(map_file: str, duration: int, workers: int, stagnation: int) -> Non
 
         best = _run_parallel(
             tile_info, assignments, sa_duration, greedy_solution, map_data.name,
-            workers, stagnation, dashboard,
+            workers, stagnation, dashboard, no_hard=no_hard, route=route,
         )
 
         # Always save best layout on exit (including Ctrl+C)
         best_path = str(Path("outputs") / _slugify(map_data.name) / "best_layout.png")
         best_image = render_layout(tile_info, best)
         save_layout(best_image, best_path)
+        if route:
+            tour_path = compute_tour_path(tile_info, best.assignments)
+            if tour_path.tiles:
+                route_image = render_route(best_image, tour_path)
+                save_layout(route_image, best_path.replace(".png", "_route.png"))
 
         dashboard.log(
             f"Done: {best.beehouse_count} bh, "

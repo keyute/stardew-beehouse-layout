@@ -1,0 +1,19 @@
+name: Single Flower Cluster
+legend:
+  ".": path
+  E: entrance
+  S: soil
+map: |
+  EEEEEEEEEEEEE
+  E...........E
+  E...........E
+  E...........E
+  E...........E
+  E...........E
+  E.....S.....E
+  E...........E
+  E...........E
+  E...........E
+  E...........E
+  E...........E
+  EEEEEEEEEEEEE

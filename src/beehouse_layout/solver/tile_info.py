@@ -11,6 +11,7 @@ from beehouse_layout.constants import (
     FLOWER_RANGE,
     FLOWER_TILES,
     TILE_ENTRANCE,
+    TILE_INTERACTABLE,
     TILE_OBSTACLE,
     WALKABLE_TILES,
 )
@@ -36,6 +37,7 @@ class TileInfo:
     walkable_tiles: set[tuple[int, int]]
     entrance_tiles: set[tuple[int, int]]
     obstacle_tiles: set[tuple[int, int]]
+    interactable_tiles: set[tuple[int, int]]
 
 
 def precompute(map_data: MapData) -> TileInfo:
@@ -52,6 +54,7 @@ def precompute(map_data: MapData) -> TileInfo:
     walkable_set: set[tuple[int, int]] = set()
     entrance_set: set[tuple[int, int]] = set()
     obstacle_set: set[tuple[int, int]] = set()
+    interactable_set: set[tuple[int, int]] = set()
 
     # First pass: classify tiles
     for y, row in enumerate(grid):
@@ -68,8 +71,10 @@ def precompute(map_data: MapData) -> TileInfo:
                 walkable_set.add(pos)
             if tt == TILE_ENTRANCE:
                 entrance_set.add(pos)
-            if tt == TILE_OBSTACLE:
+            if tt == TILE_OBSTACLE or tt == TILE_INTERACTABLE:
                 obstacle_set.add(pos)
+            if tt == TILE_INTERACTABLE:
+                interactable_set.add(pos)
 
     # Second pass: precompute neighbors and flower diamonds
     for pos in tile_type:
@@ -109,6 +114,7 @@ def precompute(map_data: MapData) -> TileInfo:
         walkable_tiles=walkable_set,
         entrance_tiles=entrance_set,
         obstacle_tiles=obstacle_set,
+        interactable_tiles=interactable_set,
     )
 
 
