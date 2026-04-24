@@ -1,10 +1,10 @@
-name: Quality Sprinkler Cluster
+name: Quality Sprinkler
 legend:
   ".": path
   E: entrance
   S: soil
   X: obstacle
-map: |
+map: |-
   EEEEEEEEEEEEEEE
   E.............E
   E.............E
@@ -20,3 +20,4 @@ map: |
   E.............E
   E.............E
   EEEEEEEEEEEEEEE
+

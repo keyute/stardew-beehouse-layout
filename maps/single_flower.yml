@@ -1,9 +1,9 @@
-name: Single Flower Cluster
+name: Single Flower
 legend:
   ".": path
   E: entrance
   S: soil
-map: |
+map: |-
   EEEEEEEEEEEEE
   E...........E
   E...........E
@@ -17,3 +17,4 @@ map: |
   E...........E
   E...........E
   EEEEEEEEEEEEE
+

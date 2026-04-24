@@ -17,7 +17,7 @@ from beehouse_layout.solver.constraints import (
 )
 from beehouse_layout.solver.greedy import _rollback, _try_place_flower_group
 from beehouse_layout.solver.scoring import score_solution
-from beehouse_layout.solver.tile_info import TileInfo
+from beehouse_layout.solver.tile_info import TileInfo, is_walkable
 from beehouse_layout.solver.tour import optimize_tour
 from beehouse_layout.solver.types import Solution, TileState
 
@@ -417,6 +417,85 @@ def _try_convert_beehouse_to_flower(
     return changeset
 
 
+def _try_swap_beehouse(
+    tile_info: TileInfo,
+    assignments: dict[tuple[int, int], TileState],
+    *,
+    no_hard: bool = False,
+) -> dict[tuple[int, int], TileState | None] | None:
+    """Swap a beehouse with an adjacent empty beehouse-eligible tile.
+
+    Only swaps beehouses that are NOT adjacent to a flower, to avoid
+    exposing shielded flowers. Returns changeset on success, None on failure.
+    """
+    beehouses = [
+        pos
+        for pos, state in assignments.items()
+        if state == TileState.BEEHOUSE
+        and not any(
+            assignments.get(nb) == TileState.FLOWER
+            for nb in tile_info.all_neighbors[pos]
+        )
+    ]
+    if not beehouses:
+        return None
+    bh_pos = random.choice(beehouses)
+
+    # Find adjacent empty beehouse-eligible tiles
+    candidates = [
+        nb
+        for nb in tile_info.all_neighbors[bh_pos]
+        if is_walkable(nb, tile_info, assignments) and nb in tile_info.beehouse_tiles
+    ]
+    if not candidates:
+        return None
+    empty_pos = random.choice(candidates)
+
+    changeset: dict[tuple[int, int], TileState | None] = {
+        bh_pos: assignments[bh_pos],
+        empty_pos: assignments.get(empty_pos),
+    }
+
+    # Atomic swap
+    del assignments[bh_pos]
+    assignments[empty_pos] = TileState.BEEHOUSE
+
+    # Validate new beehouse has flower coverage
+    if not check_flower_coverage(empty_pos, tile_info, assignments):
+        _rollback(assignments, changeset)
+        return None
+
+    # Validate accessibility of new beehouse
+    access = classify_beehouse_access(empty_pos, tile_info, assignments)
+    if access is None or (no_hard and access == "hard"):
+        _rollback(assignments, changeset)
+        return None
+
+    # Check flower safety (bh_pos became walkable, could expose adjacent flowers)
+    for nb in tile_info.all_neighbors[bh_pos]:
+        if assignments.get(nb) == TileState.FLOWER:
+            if not check_flower_safety(nb, tile_info, assignments):
+                _rollback(assignments, changeset)
+                return None
+
+    # Check adjacent beehouses still accessible
+    all_changed = {bh_pos, empty_pos}
+    for changed in all_changed:
+        for nb in tile_info.all_neighbors[changed]:
+            if nb not in all_changed and assignments.get(nb) == TileState.BEEHOUSE:
+                access_nb = classify_beehouse_access(nb, tile_info, assignments)
+                if access_nb is None or (no_hard and access_nb == "hard"):
+                    _rollback(assignments, changeset)
+                    return None
+
+    # Check connectivity (empty_pos became non-walkable)
+    if not check_connectivity(tile_info, assignments, removed_walkable={empty_pos}):
+        _rollback(assignments, changeset)
+        return None
+
+    return changeset
+
+
 def _quick_score(
     tile_info: TileInfo,
     assignments: dict[tuple[int, int], TileState],
@@ -462,13 +541,14 @@ def anneal(
     improvements = 0
 
     moves = [
-        ("add_beehouse", 0.25),
+        ("add_beehouse", 0.20),
         ("remove_beehouse", 0.10),
         ("add_flower_cluster", 0.10),
-        ("add_multi_flower_cluster", 0.15),
-        ("convert_beehouse_to_flower", 0.15),
+        ("add_multi_flower_cluster", 0.10),
+        ("convert_beehouse_to_flower", 0.10),
         ("remove_flower", 0.05),
-        ("move_flower", 0.20),
+        ("move_flower", 0.15),
+        ("swap_beehouse", 0.20),
     ]
     move_names = [m[0] for m in moves]
     move_weights = [m[1] for m in moves]
@@ -500,11 +580,12 @@ def anneal(
             changeset = _try_remove_flower(tile_info, assignments)
         elif move == "move_flower":
             changeset = _try_move_flower(tile_info, assignments, no_hard=no_hard)
+        elif move == "swap_beehouse":
+            changeset = _try_swap_beehouse(tile_info, assignments, no_hard=no_hard)
 
         if changeset is None:
             iterations += 1
-            temp *= COOLING_RATE
-            continue
+            continue  # Don't cool on failed moves — preserves exploration budget
 
         new_score = _quick_score(tile_info, assignments)
         delta = new_score - current_score
