@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from beehouse_layout.constants import (
-    SCORE_BEEHOUSE,
-    SCORE_OBSTACLE_DIAGONAL,
-    SCORE_POT,
-    SCORE_STEP,
-    TILE_POT,
-)
+from beehouse_layout.constants import TILE_POT
+
+# Scoring weights (lexicographic: beehouse >> steps >> pots >> obstacle penalty)
+SCORE_BEEHOUSE = 10000
+SCORE_STEP = -1
+SCORE_POT = -50
+SCORE_OBSTACLE_DIAGONAL = -100
 from beehouse_layout.solver.constraints import classify_beehouse_access
 from beehouse_layout.solver.tile_info import TileInfo
 from beehouse_layout.solver.types import Solution, TileState

@@ -55,13 +55,13 @@ def _validate_and_save(
     violations = validate_solution(tile_info, solution.assignments, no_hard=no_hard)
     if violations:
         return None
-    image = render_layout(tile_info, solution)
+    image, top_padding = render_layout(tile_info, solution)
     path = _output_path(map_name, solution)
     save_layout(image, path)
     if route:
         tour_path = compute_tour_path(tile_info, solution.assignments)
         if tour_path.tiles:
-            route_image = render_route(image, tour_path)
+            route_image = render_route(image, tour_path, top_padding)
             save_layout(route_image, path.replace(".png", "_route.png"))
     return path
 
@@ -306,12 +306,12 @@ def optimize(map_file: str, duration: int, workers: int, stagnation: int, no_har
 
         # Always save best layout on exit (including Ctrl+C)
         best_path = str(Path("outputs") / _slugify(map_data.name) / "best_layout.png")
-        best_image = render_layout(tile_info, best)
+        best_image, best_top_padding = render_layout(tile_info, best)
         save_layout(best_image, best_path)
         if route:
             tour_path = compute_tour_path(tile_info, best.assignments)
             if tour_path.tiles:
-                route_image = render_route(best_image, tour_path)
+                route_image = render_route(best_image, tour_path, best_top_padding)
                 save_layout(route_image, best_path.replace(".png", "_route.png"))
 
         dashboard.log(

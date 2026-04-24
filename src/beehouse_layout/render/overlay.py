@@ -2,7 +2,27 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from beehouse_layout.constants import TILE_COLORS, TILE_SIZE
+from beehouse_layout.constants import (
+    TILE_ENTRANCE,
+    TILE_INTERACTABLE,
+    TILE_OBSTACLE,
+    TILE_PATH,
+    TILE_POT,
+    TILE_SOIL,
+    TILE_WALKWAY,
+)
+from beehouse_layout.render.constants import TILE_SIZE
+
+# Tile colors for rendering (RGBA)
+TILE_COLORS: dict[str, tuple[int, int, int, int]] = {
+    TILE_POT: (0, 200, 0, 100),
+    TILE_SOIL: (139, 90, 43, 120),
+    TILE_OBSTACLE: (200, 0, 0, 100),
+    TILE_INTERACTABLE: (255, 130, 0, 120),
+    TILE_PATH: (0, 100, 200, 100),
+    TILE_ENTRANCE: (255, 200, 0, 150),
+    TILE_WALKWAY: (0, 200, 200, 100),
+}
 from beehouse_layout.map.parser import MapData
 
 LEGEND_BAR_HEIGHT = 40

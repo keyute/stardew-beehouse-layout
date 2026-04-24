@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 
-from beehouse_layout.constants import BEEHOUSE_TILES
+from beehouse_layout.solver.constants import BEEHOUSE_TILES
 from beehouse_layout.solver.constraints import (
     check_connectivity,
     check_flower_coverage,

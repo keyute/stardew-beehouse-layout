@@ -4,11 +4,8 @@ from __future__ import annotations
 
 from collections import deque
 
-from beehouse_layout.constants import (
-    ALL_OFFSETS,
-    CARDINAL_OFFSETS,
-    WALKABLE_TILES,
-)
+from beehouse_layout.constants import WALKABLE_TILES
+from beehouse_layout.solver.constants import ALL_OFFSETS, CARDINAL_OFFSETS
 from beehouse_layout.solver.tile_info import TileInfo, get_walkable_set, is_walkable
 from beehouse_layout.solver.types import TileState
 

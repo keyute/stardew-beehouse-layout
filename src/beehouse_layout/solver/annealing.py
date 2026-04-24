@@ -8,7 +8,7 @@ import random
 import time
 from collections.abc import Callable
 
-from beehouse_layout.constants import BEEHOUSE_TILES
+from beehouse_layout.solver.constants import BEEHOUSE_TILES
 from beehouse_layout.solver.constraints import (
     check_connectivity,
     check_flower_coverage,
@@ -20,12 +20,14 @@ from beehouse_layout.solver.scoring import score_solution
 from beehouse_layout.solver.tile_info import TileInfo, is_walkable
 from beehouse_layout.solver.tour import optimize_tour
 from beehouse_layout.solver.types import Solution, TileState
+from beehouse_layout.solver.validator import cleanup_assignments
 
 # SA parameters
 INITIAL_TEMP = 100.0
 COOLING_RATE = 0.9999
 MIN_TEMP = 0.01
 REPORT_INTERVAL_SECS = 2
+CLEANUP_INTERVAL = 5000
 
 
 def _cascade_remove_unsafe(
@@ -541,14 +543,14 @@ def anneal(
     improvements = 0
 
     moves = [
-        ("add_beehouse", 0.20),
+        ("add_beehouse", 0.25),
         ("remove_beehouse", 0.10),
         ("add_flower_cluster", 0.10),
-        ("add_multi_flower_cluster", 0.10),
-        ("convert_beehouse_to_flower", 0.10),
+        ("add_multi_flower_cluster", 0.15),
+        ("convert_beehouse_to_flower", 0.15),
         ("remove_flower", 0.05),
-        ("move_flower", 0.15),
-        ("swap_beehouse", 0.20),
+        ("move_flower", 0.20),
+        ("swap_beehouse", 0.10),
     ]
     move_names = [m[0] for m in moves]
     move_weights = [m[1] for m in moves]
@@ -585,7 +587,8 @@ def anneal(
 
         if changeset is None:
             iterations += 1
-            continue  # Don't cool on failed moves — preserves exploration budget
+            temp *= COOLING_RATE
+            continue
 
         new_score = _quick_score(tile_info, assignments)
         delta = new_score - current_score
@@ -619,6 +622,14 @@ def anneal(
                 )
                 on_progress(iterations, elapsed, temp, bh_count, improvements)
             last_report = now
+
+        # Periodic cleanup to prevent invalid state accumulation
+        if iterations % CLEANUP_INTERVAL == 0:
+            cleanup_assignments(tile_info, assignments)
+            current_score = _quick_score(tile_info, assignments)
+            if current_score > best_score:
+                best_score = current_score
+                best_assignments = dict(assignments)
 
     # Final scoring with tour
     tour_steps = optimize_tour(tile_info, best_assignments)

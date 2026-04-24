@@ -5,16 +5,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from beehouse_layout.constants import (
-    ALL_OFFSETS,
-    BEEHOUSE_TILES,
-    CARDINAL_OFFSETS,
-    FLOWER_RANGE,
-    FLOWER_TILES,
     TILE_ENTRANCE,
     TILE_INTERACTABLE,
     TILE_OBSTACLE,
+    TILE_POT,
+    TILE_SOIL,
     WALKABLE_TILES,
 )
+from beehouse_layout.solver.constants import ALL_OFFSETS, BEEHOUSE_TILES, CARDINAL_OFFSETS
+
+# Tiles where flowers can be planted (soil = cheap/direct, pot = expensive/garden pot)
+FLOWER_TILES = frozenset({TILE_POT, TILE_SOIL})
+
+# Game mechanics
+FLOWER_RANGE = 5  # Manhattan distance for beehouse flower detection
 from beehouse_layout.map.parser import MapData
 from beehouse_layout.solver.types import TileState
 

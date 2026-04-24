@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from PIL import Image, ImageDraw, ImageFont
 
-from beehouse_layout.constants import TILE_SIZE
-from beehouse_layout.render.layout import TOP_PADDING
+from beehouse_layout.render.constants import TILE_SIZE
 from beehouse_layout.solver.tour import TourPath
 
 # Route rendering colors (RGBA)
@@ -19,11 +18,11 @@ LINE_WIDTH = 3
 STOP_RADIUS = 10
 
 
-def _tile_center(x: int, y: int) -> tuple[int, int]:
-    return x * TILE_SIZE + TILE_SIZE // 2, TOP_PADDING + y * TILE_SIZE + TILE_SIZE // 2
+def _tile_center(x: int, y: int, top_padding: int) -> tuple[int, int]:
+    return x * TILE_SIZE + TILE_SIZE // 2, top_padding + y * TILE_SIZE + TILE_SIZE // 2
 
 
-def render_route(base_image: Image.Image, tour_path: TourPath) -> Image.Image:
+def render_route(base_image: Image.Image, tour_path: TourPath, top_padding: int) -> Image.Image:
     """Overlay the tour route on a copy of the layout image."""
     image = base_image.copy()
 
@@ -42,14 +41,14 @@ def render_route(base_image: Image.Image, tour_path: TourPath) -> Image.Image:
     # Highlight walked tiles
     for x, y in tour_path.tiles:
         x0 = x * TILE_SIZE
-        y0 = TOP_PADDING + y * TILE_SIZE
+        y0 = top_padding + y * TILE_SIZE
         draw.rectangle(
             [x0, y0, x0 + TILE_SIZE, y0 + TILE_SIZE],
             fill=PATH_HIGHLIGHT_COLOR,
         )
 
     # Draw path lines between consecutive tiles
-    centers = [_tile_center(x, y) for x, y in tour_path.tiles]
+    centers = [_tile_center(x, y, top_padding) for x, y in tour_path.tiles]
     for i in range(len(centers) - 1):
         draw.line([centers[i], centers[i + 1]], fill=PATH_LINE_COLOR, width=LINE_WIDTH)
 

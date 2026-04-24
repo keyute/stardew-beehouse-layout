@@ -7,25 +7,54 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from beehouse_layout.constants import (
-    ASSET_DIR,
-    DEFAULT_FLOOR_SPRITE,
-    FLOOR_SPRITES,
-    FLOWER_SPRITE,
-    GRAVEL_PATH_SPRITE,
-    POT_SPRITE,
-    TALL_SPRITES,
+    TILE_ENTRANCE,
+    TILE_INTERACTABLE,
+    TILE_OBSTACLE,
     TILE_POT,
-    TILE_SIZE,
     TILE_SOIL,
+    TILE_WALKWAY,
     WALKABLE_TILES,
 )
+from beehouse_layout.render.constants import TILE_SIZE
 from beehouse_layout.solver.tile_info import TileInfo
 from beehouse_layout.solver.types import Solution, TileState
 
+# Sprite asset paths
+ASSET_DIR = "assets"
+BEEHOUSE_SPRITE = "bee_house.png"
+FLOWER_SPRITE = "fairy_rose.png"
+FLOOR_SPRITE = "wood_floor.png"
+POT_SPRITE = "garden_pot.png"
+STONE_SPRITE = "stone.png"
+GRAVEL_PATH_SPRITE = "gravel_path.png"
+CHEST_SPRITE = "chest.png"
+BRICK_FLOOR_SPRITE = "brick_floor.png"
+STONE_FLOOR_SPRITE = "stone_floor.png"
+CRYSTAL_FLOOR_SPRITE = "crystal_floor.png"
+
+# Floor-level sprites (1-tile, no Y-sorting needed)
+FLOOR_SPRITES: dict[str, str] = {
+    TILE_ENTRANCE: CRYSTAL_FLOOR_SPRITE,
+    TILE_WALKWAY: BRICK_FLOOR_SPRITE,
+    TILE_OBSTACLE: STONE_FLOOR_SPRITE,
+    TILE_INTERACTABLE: STONE_FLOOR_SPRITE,
+}
+DEFAULT_FLOOR_SPRITE = FLOOR_SPRITE
+
+# Tall sprites (bottom-aligned, Y-sorted) — map tile types and solution states
+TALL_SPRITES: dict[str, str] = {
+    TILE_OBSTACLE: STONE_SPRITE,
+    TILE_INTERACTABLE: CHEST_SPRITE,
+    "beehouse": BEEHOUSE_SPRITE,
+}
+
+# Rendering offsets for garden pot flowers
+POT_Y_OFFSET = -15  # pot sprite extends 15px above tile (63 - 48)
+CROP_IN_POT_OFFSET = -16  # flower shifts up 16px when growing from pot
+CROP_ON_SOIL_OFFSET = -8  # flower shifts up so beehouse doesn't fully cover it
+
 # Metrics bar height
 METRICS_BAR_HEIGHT = 60
-# Extra vertical space for tall sprites (beehouses) at the top row
-TOP_PADDING = TILE_SIZE
 
 
 def _load_sprite(name: str) -> Image.Image:
@@ -33,8 +62,48 @@ def _load_sprite(name: str) -> Image.Image:
     return Image.open(path).convert("RGBA")
 
 
-def render_layout(tile_info: TileInfo, solution: Solution) -> Image.Image:
-    """Render the full layout with tile colors, sprites, and metrics bar."""
+def _compute_top_padding(
+    tile_info: TileInfo,
+    solution: Solution,
+    pot_sprite: Image.Image,
+    tall_sprite_cache: dict[str, Image.Image],
+) -> int:
+    """Calculate the minimum top padding needed for sprites that extend above row 0."""
+    top_padding = 0
+
+    for pos, tt in tile_info.tile_type.items():
+        if pos[1] != 0:
+            continue
+        sprite_name = TALL_SPRITES.get(tt)
+        if sprite_name:
+            sprite = tall_sprite_cache[sprite_name]
+            top_padding = max(top_padding, sprite.size[1] - TILE_SIZE)
+
+    for pos, state in solution.assignments.items():
+        if pos[1] != 0:
+            continue
+        if state == TileState.FLOWER:
+            if tile_info.tile_type.get(pos) == TILE_POT:
+                top_padding = max(
+                    top_padding,
+                    pot_sprite.size[1] - TILE_SIZE,
+                    abs(CROP_IN_POT_OFFSET),
+                )
+            elif tile_info.tile_type.get(pos) == TILE_SOIL:
+                top_padding = max(top_padding, abs(CROP_ON_SOIL_OFFSET))
+        sprite_name = TALL_SPRITES.get(state.value)
+        if sprite_name:
+            sprite = tall_sprite_cache[sprite_name]
+            top_padding = max(top_padding, sprite.size[1] - TILE_SIZE)
+
+    return top_padding
+
+
+def render_layout(tile_info: TileInfo, solution: Solution) -> tuple[Image.Image, int]:
+    """Render the full layout with tile colors, sprites, and metrics bar.
+
+    Returns the rendered image and the top padding used.
+    """
     width = tile_info.width
     height = tile_info.height
 
@@ -54,14 +123,6 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> Image.Image:
     metrics_bbox = font.getbbox(metrics_text)
     metrics_w = metrics_bbox[2] - metrics_bbox[0]
 
-    # Ensure image is wide enough for grid and metrics
-    content_padding = 20
-    img_w = max(width * TILE_SIZE, metrics_w + content_padding)
-    img_h = TOP_PADDING + height * TILE_SIZE + METRICS_BAR_HEIGHT
-
-    image = Image.new("RGBA", (img_w, img_h), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(image)
-
     # Load sprites
     flower_sprite = _load_sprite(FLOWER_SPRITE)
     pot_sprite = _load_sprite(POT_SPRITE)
@@ -70,11 +131,22 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> Image.Image:
     floor_sprite_cache = {name: _load_sprite(name) for name in FLOOR_SPRITES.values()}
     tall_sprite_cache = {name: _load_sprite(name) for name in TALL_SPRITES.values()}
 
+    # Compute dynamic top padding based on actual sprite overflow
+    top_padding = _compute_top_padding(tile_info, solution, pot_sprite, tall_sprite_cache)
+
+    # Ensure image is wide enough for grid and metrics
+    content_padding = 20
+    img_w = max(width * TILE_SIZE, metrics_w + content_padding)
+    img_h = top_padding + height * TILE_SIZE + METRICS_BAR_HEIGHT
+
+    image = Image.new("RGBA", (img_w, img_h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+
     # Pass 1: Floor textures (data-driven)
     for pos, tt in tile_info.tile_type.items():
         x, y = pos
         x0 = x * TILE_SIZE
-        y0 = TOP_PADDING + y * TILE_SIZE
+        y0 = top_padding + y * TILE_SIZE
         floor_name = FLOOR_SPRITES.get(tt)
         if floor_name:
             sprite = floor_sprite_cache[floor_name]
@@ -87,48 +159,50 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> Image.Image:
         if state == TileState.FLOWER and tile_info.tile_type.get(pos) == TILE_SOIL:
             x, y = pos
             x0 = x * TILE_SIZE
-            y0 = TOP_PADDING + y * TILE_SIZE
+            y0 = top_padding + y * TILE_SIZE
             image.paste(gravel_path_sprite, (x0, y0), gravel_path_sprite)
 
-    # Pass 3: Flowers and pots (Y-sorted for correct overlap)
-    pot_y_offset = -(pot_sprite.size[1] - TILE_SIZE)  # -15, bottom-aligned
-    crop_in_pot_offset = -16  # flower shifts up when growing from pot
+    # Pass 3: All Y-sorted objects (flowers, pots, beehouses, obstacles, chests)
+    render_ops: list[tuple[int, list[tuple[Image.Image, int, int]]]] = []
 
-    flower_positions = sorted(
-        (pos for pos, state in solution.assignments.items() if state == TileState.FLOWER),
-        key=lambda p: p[1],
-    )
-    for pos in flower_positions:
-        x, y = pos
-        x0 = x * TILE_SIZE
-        y0 = TOP_PADDING + y * TILE_SIZE
-        if tile_info.tile_type.get(pos) == TILE_POT:
-            image.paste(pot_sprite, (x0, y0 + pot_y_offset), pot_sprite)
-            image.paste(flower_sprite, (x0, y0 + crop_in_pot_offset), flower_sprite)
-        else:
-            image.paste(flower_sprite, (x0, y0), flower_sprite)
-
-    # Pass 4: Tall objects (unified Y-sorted pass for map tiles and solution objects)
-    tall_objects: list[tuple[int, int, Image.Image]] = []
+    for pos, state in solution.assignments.items():
+        if state == TileState.FLOWER:
+            x, y = pos
+            x0 = x * TILE_SIZE
+            y0 = top_padding + y * TILE_SIZE
+            if tile_info.tile_type.get(pos) == TILE_POT:
+                render_ops.append((y, [
+                    (pot_sprite, x0, y0 + POT_Y_OFFSET),
+                    (flower_sprite, x0, y0 + CROP_IN_POT_OFFSET),
+                ]))
+            else:
+                render_ops.append((y, [(flower_sprite, x0, y0 + CROP_ON_SOIL_OFFSET)]))
 
     for pos, tt in tile_info.tile_type.items():
         sprite_name = TALL_SPRITES.get(tt)
         if sprite_name:
-            tall_objects.append((pos[0], pos[1], tall_sprite_cache[sprite_name]))
+            x, y = pos
+            sprite = tall_sprite_cache[sprite_name]
+            x0 = x * TILE_SIZE
+            y0 = top_padding + y * TILE_SIZE - (sprite.size[1] - TILE_SIZE)
+            render_ops.append((y, [(sprite, x0, y0)]))
 
     for pos, state in solution.assignments.items():
         sprite_name = TALL_SPRITES.get(state.value)
         if sprite_name:
-            tall_objects.append((pos[0], pos[1], tall_sprite_cache[sprite_name]))
+            x, y = pos
+            sprite = tall_sprite_cache[sprite_name]
+            x0 = x * TILE_SIZE
+            y0 = top_padding + y * TILE_SIZE - (sprite.size[1] - TILE_SIZE)
+            render_ops.append((y, [(sprite, x0, y0)]))
 
-    tall_objects.sort(key=lambda o: o[1])
-    for x, y, sprite in tall_objects:
-        x0 = x * TILE_SIZE
-        y0 = TOP_PADDING + y * TILE_SIZE - (sprite.size[1] - TILE_SIZE)
-        image.paste(sprite, (x0, y0), sprite)
+    render_ops.sort(key=lambda op: op[0])
+    for _, draw_calls in render_ops:
+        for sprite, px, py in draw_calls:
+            image.paste(sprite, (px, py), sprite)
 
-    # Pass 5: Draw metrics bar at bottom
-    bar_y = TOP_PADDING + height * TILE_SIZE
+    # Pass 4: Draw metrics bar at bottom
+    bar_y = top_padding + height * TILE_SIZE
     draw.rectangle(
         [0, bar_y, img_w, bar_y + METRICS_BAR_HEIGHT],
         fill=(40, 40, 40, 230),
@@ -142,7 +216,7 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> Image.Image:
 
     draw.text((text_x, text_y), metrics_text, fill=(255, 255, 255, 255), font=font)
 
-    return image
+    return image, top_padding
 
 
 def save_layout(image: Image.Image, path: str) -> None:

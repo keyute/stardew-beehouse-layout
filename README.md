@@ -90,12 +90,13 @@ Any valid layout must satisfy all of these constraints:
   pickup). Flowers must be shielded on all 8 sides by beehouses, obstacles, other flowers, or the map edge
 - **Beehouse accessibility**: Every beehouse must have at least one walkable tile within 8-directional adjacency.
   Access is classified by checking all 8 directions for the best available approach:
-  - **Easy**: at least one cardinal (N/S/E/W) walkable neighbor — player walks straight to it
-  - **OK**: diagonal-only access, but no interactable obstacle on the squeeze tiles
-  - **Hard**: diagonal-only access where every available diagonal has an interactable obstacle (chest, machine) on at
-    least one of the two squeeze tiles between the player and the beehouse — risks accidental interaction on controller.
-    Non-interactable obstacles (rocks, walls) do not trigger this penalty
-  - Use `--no-hard` to reject any solution containing hard-access beehouses
+    - **Easy**: at least one cardinal (N/S/E/W) walkable neighbor — player walks straight to it
+    - **OK**: diagonal-only access, but no interactable obstacle on the squeeze tiles
+    - **Hard**: diagonal-only access where every available diagonal has an interactable obstacle (chest, machine) on at
+      least one of the two squeeze tiles between the player and the beehouse — risks accidental interaction on
+      controller.
+      Non-interactable obstacles (rocks, walls) do not trigger this penalty
+    - Use `--no-hard` to reject any solution containing hard-access beehouses
 - **Entrance connectivity**: Every entrance tile must have at least one cardinal neighbor that is a path, entrance, or
   walkway tile
 - **Connectivity**: All beehouses must be reachable from an entrance tile via cardinal-direction walkable paths
@@ -103,6 +104,9 @@ Any valid layout must satisfy all of these constraints:
   return, including backtracking through dead ends
 
 ## Contributions
+
+All contributions to map data is welcome! I've only included a tiny subset of what is possible with this tool as I was
+only interested in getting the best possible optimal layout on the left side of the ginger island farm.
 
 If you have any questions or suggestions, feel free to open issues. If you have a feature or improvement you really
 want implemented, please implement it yourself and open a pull request and I will review it. Please do not open an
