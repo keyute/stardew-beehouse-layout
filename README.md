@@ -85,3 +85,10 @@ Any valid layout must satisfy all of these constraints:
 - **Connectivity**: All beehouses must be reachable from an entrance tile via cardinal-direction walkable paths
 - **Collection tour**: The optimizer minimizes the walking steps needed to visit every beehouse from an entrance and
   return, including backtracking through dead ends
+
+## Contributions
+
+If you have any questions or suggestions, feel free to open issues. If you have a feature or improvement you really
+want implemented, please implement it yourself and open a pull request and I will review it. Please do not open an
+issue or pull request if the content is not meaningful and can be better served with tutorials that is readily available
+online.
