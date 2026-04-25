@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 from beehouse_layout.render.constants import TILE_SIZE
+from beehouse_layout.render.fonts import load_font
 from beehouse_layout.solver.tour import TourPath
 
 # Route rendering colors (RGBA)
@@ -33,10 +34,7 @@ def render_route(base_image: Image.Image, tour_path: TourPath, top_padding: int)
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
-    try:
-        font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 12)
-    except (OSError, AttributeError):
-        font = ImageFont.load_default()
+    font = load_font(12)
 
     # Highlight walked tiles
     for x, y in tour_path.tiles:

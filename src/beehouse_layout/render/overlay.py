@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 from beehouse_layout.constants import (
     TILE_ENTRANCE,
@@ -12,6 +12,7 @@ from beehouse_layout.constants import (
     TILE_WALKWAY,
 )
 from beehouse_layout.render.constants import TILE_SIZE
+from beehouse_layout.render.fonts import load_font
 
 # Tile colors for rendering (RGBA)
 TILE_COLORS: dict[str, tuple[int, int, int, int]] = {
@@ -34,10 +35,7 @@ def render_overlay(map_data: MapData) -> Image.Image:
     width = max(len(row) for row in map_data.grid)
 
     # Load font early to measure legend width before creating the image
-    try:
-        font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 14)
-    except (OSError, AttributeError):
-        font = ImageFont.load_default()
+    font = load_font(14)
 
     legend_items = [(name.capitalize(), color) for name, color in TILE_COLORS.items()]
     swatch_size = 16

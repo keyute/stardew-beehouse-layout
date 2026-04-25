@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 from beehouse_layout.constants import (
     TILE_ENTRANCE,
@@ -16,6 +16,7 @@ from beehouse_layout.constants import (
     WALKABLE_TILES,
 )
 from beehouse_layout.render.constants import TILE_SIZE
+from beehouse_layout.render.fonts import load_font
 from beehouse_layout.solver.tile_info import TileInfo
 from beehouse_layout.solver.types import Solution, TileState
 
@@ -36,10 +37,10 @@ CRYSTAL_FLOOR_SPRITE = "crystal_floor.png"
 FLOOR_SPRITES: dict[str, str] = {
     TILE_ENTRANCE: CRYSTAL_FLOOR_SPRITE,
     TILE_WALKWAY: BRICK_FLOOR_SPRITE,
-    TILE_OBSTACLE: STONE_FLOOR_SPRITE,
-    TILE_INTERACTABLE: STONE_FLOOR_SPRITE,
+    TILE_OBSTACLE: FLOOR_SPRITE,
+    TILE_INTERACTABLE: FLOOR_SPRITE,
 }
-DEFAULT_FLOOR_SPRITE = FLOOR_SPRITE
+DEFAULT_FLOOR_SPRITE = STONE_FLOOR_SPRITE
 
 # Tall sprites (bottom-aligned, Y-sorted) — map tile types and solution states
 TALL_SPRITES: dict[str, str] = {
@@ -55,6 +56,19 @@ CROP_ON_SOIL_OFFSET = -8  # flower shifts up so beehouse doesn't fully cover it
 
 # Metrics bar height
 METRICS_BAR_HEIGHT = 60
+
+# Legend bar
+LEGEND_BAR_HEIGHT = 40
+LEGEND_THUMB_SIZE = 20
+LEGEND_ITEMS: list[tuple[str, str]] = [
+    ("Beehouse", BEEHOUSE_SPRITE),
+    ("Fairy Rose", FLOWER_SPRITE),
+    ("Garden Pot", POT_SPRITE),
+    ("Obstacle", STONE_SPRITE),
+    ("Interactable", CHEST_SPRITE),
+    ("Entrance", CRYSTAL_FLOOR_SPRITE),
+    ("Walkway", BRICK_FLOOR_SPRITE),
+]
 
 
 def _load_sprite(name: str) -> Image.Image:
@@ -108,10 +122,8 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> tuple[Image.Image,
     height = tile_info.height
 
     # Load fonts early so we can measure text before creating the image
-    try:
-        font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 20)
-    except (OSError, AttributeError):
-        font = ImageFont.load_default()
+    font = load_font(20)
+    legend_font = load_font(14)
 
     # Pre-calculate metrics text width
     metrics_text = (
@@ -122,6 +134,14 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> tuple[Image.Image,
     )
     metrics_bbox = font.getbbox(metrics_text)
     metrics_w = metrics_bbox[2] - metrics_bbox[0]
+
+    # Pre-calculate legend width
+    legend_padding = 12
+    legend_w = 0
+    for label, _ in LEGEND_ITEMS:
+        label_bbox = legend_font.getbbox(label)
+        legend_w += LEGEND_THUMB_SIZE + 4 + (label_bbox[2] - label_bbox[0]) + legend_padding
+    legend_w -= legend_padding
 
     # Load sprites
     flower_sprite = _load_sprite(FLOWER_SPRITE)
@@ -136,8 +156,8 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> tuple[Image.Image,
 
     # Ensure image is wide enough for grid and metrics
     content_padding = 20
-    img_w = max(width * TILE_SIZE, metrics_w + content_padding)
-    img_h = top_padding + height * TILE_SIZE + METRICS_BAR_HEIGHT
+    img_w = max(width * TILE_SIZE, metrics_w + content_padding, legend_w + content_padding)
+    img_h = top_padding + height * TILE_SIZE + METRICS_BAR_HEIGHT + LEGEND_BAR_HEIGHT
 
     image = Image.new("RGBA", (img_w, img_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
@@ -215,6 +235,32 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> tuple[Image.Image,
     text_y = bar_y + (METRICS_BAR_HEIGHT - text_h) // 2
 
     draw.text((text_x, text_y), metrics_text, fill=(255, 255, 255, 255), font=font)
+
+    # Pass 5: Draw legend bar below metrics
+    legend_y = bar_y + METRICS_BAR_HEIGHT
+    draw.rectangle(
+        [0, legend_y, img_w, legend_y + LEGEND_BAR_HEIGHT],
+        fill=(40, 40, 40, 230),
+    )
+
+    lx = (img_w - legend_w) // 2
+    ly_center = legend_y + (LEGEND_BAR_HEIGHT - LEGEND_THUMB_SIZE) // 2
+
+    for label, sprite_name in LEGEND_ITEMS:
+        thumb = _load_sprite(sprite_name).resize(
+            (LEGEND_THUMB_SIZE, LEGEND_THUMB_SIZE), Image.LANCZOS
+        )
+        image.paste(thumb, (lx, ly_center), thumb)
+        lx += LEGEND_THUMB_SIZE + 4
+        label_bbox = draw.textbbox((0, 0), label, font=legend_font)
+        label_h = label_bbox[3] - label_bbox[1]
+        draw.text(
+            (lx, ly_center + (LEGEND_THUMB_SIZE - label_h) // 2),
+            label,
+            fill=(200, 200, 200, 255),
+            font=legend_font,
+        )
+        lx += (label_bbox[2] - label_bbox[0]) + legend_padding
 
     return image, top_padding
 

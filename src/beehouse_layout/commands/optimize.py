@@ -4,8 +4,11 @@ import queue
 import random
 import re
 import shutil
+import signal
 import time
+from collections.abc import Callable
 from pathlib import Path
+from types import FrameType
 
 import click
 
@@ -24,6 +27,25 @@ from beehouse_layout.solver.validator import cleanup_assignments, validate_solut
 from beehouse_layout.solver.greedy import build_greedy
 
 MAX_SEED = 2**63
+
+
+def _make_sigint_handler(
+    stop_event: multiprocessing.Event,
+    user_cancelled: list[bool],
+) -> Callable[[int, FrameType | None], None]:
+    """First Ctrl+C sets stop_event; second Ctrl+C force-exits."""
+    hit_count = 0
+
+    def handler(signum: int, frame: FrameType | None) -> None:
+        nonlocal hit_count
+        hit_count += 1
+        if hit_count == 1:
+            user_cancelled[0] = True
+            stop_event.set()
+        else:
+            os._exit(1)
+
+    return handler
 
 
 def _slugify(name: str) -> str:
@@ -111,6 +133,7 @@ def _sa_worker(
     no_hard: bool = False,
 ) -> None:
     """SA worker process. Sends improvements and status to the queue."""
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     random.seed(seed)
 
     def on_improvement(solution: Solution) -> None:
@@ -126,18 +149,15 @@ def _sa_worker(
             improvements=improvements,
         ))
 
-    try:
-        anneal(
-            tile_info,
-            initial_assignments,
-            duration_secs=duration_secs,
-            on_improvement=on_improvement,
-            on_progress=on_progress,
-            stop_event=stop_event,
-            no_hard=no_hard,
-        )
-    except KeyboardInterrupt:
-        pass
+    anneal(
+        tile_info,
+        initial_assignments,
+        duration_secs=duration_secs,
+        on_improvement=on_improvement,
+        on_progress=on_progress,
+        stop_event=stop_event,
+        no_hard=no_hard,
+    )
 
 
 def _run_parallel(
@@ -152,10 +172,14 @@ def _run_parallel(
     *,
     no_hard: bool = False,
     route: bool = False,
-) -> Solution:
-    """Run SA across multiple processes with a live dashboard."""
+) -> tuple[Solution, bool]:
+    """Run SA across multiple processes with a live dashboard.
+
+    Returns (best_solution, user_stopped).
+    """
     result_queue: multiprocessing.Queue = multiprocessing.Queue()
     stop_event = multiprocessing.Event()
+    user_cancelled: list[bool] = [False]
     processes: list[multiprocessing.Process] = []
 
     for i in range(workers):
@@ -167,6 +191,9 @@ def _run_parallel(
         )
         p.start()
         processes.append(p)
+
+    old_sigint = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, _make_sigint_handler(stop_event, user_cancelled))
 
     last_improvement_time = time.monotonic()
 
@@ -187,15 +214,16 @@ def _run_parallel(
 
     try:
         while any(p.is_alive() for p in processes):
+            if stop_event.is_set():
+                break
             try:
                 _handle_msg(result_queue.get(timeout=0.5))
-                # Drain remaining queued messages
-                while True:
+                while not stop_event.is_set():
                     try:
                         _handle_msg(result_queue.get_nowait())
                     except queue.Empty:
                         break
-            except queue.Empty:
+            except (queue.Empty, InterruptedError):
                 pass
 
             if stagnation > 0:
@@ -203,16 +231,25 @@ def _run_parallel(
                     dashboard.log(f"Stopped: no improvement for {stagnation}s")
                     stop_event.set()
                     break
-    except KeyboardInterrupt:
-        dashboard.log("Stopped by user")
     finally:
         stop_event.set()
+        signal.signal(signal.SIGINT, old_sigint)
         for p in processes:
             p.terminate()
         for p in processes:
-            p.join(timeout=5)
+            p.join(timeout=2)
+        # Drain remaining messages to capture any final improvements
+        if not user_cancelled[0]:
+            while True:
+                try:
+                    _handle_msg(result_queue.get_nowait())
+                except queue.Empty:
+                    break
 
-    return best_so_far
+    if user_cancelled[0]:
+        dashboard.log("Stopped by user")
+
+    return best_so_far, user_cancelled[0]
 
 
 @click.command()
@@ -302,23 +339,23 @@ def optimize(map_file: str, duration: int, workers: int, stagnation: int, no_har
             stop_label.append("Ctrl+C to stop")
         dashboard.log(f"SA: {', '.join(stop_label)}")
 
-        best = _run_parallel(
+        best, user_stopped = _run_parallel(
             tile_info, assignments, sa_duration, greedy_solution, map_data.name,
             workers, stagnation, dashboard, no_hard=no_hard, route=route,
         )
 
-        # Always save best layout on exit (including Ctrl+C)
         best_path = str(OUTPUT_DIR / _slugify(map_data.name) / "best_layout.png")
         best_image, best_top_padding = render_layout(tile_info, best)
         save_layout(best_image, best_path)
-        if route:
+        if route and not user_stopped:
             tour_path = compute_tour_path(tile_info, best.assignments)
             if tour_path.tiles:
                 route_image = render_route(best_image, tour_path, best_top_padding)
                 save_layout(route_image, best_path.replace(".png", "_route.png"))
 
+        label = "Stopped" if user_stopped else "Done"
         dashboard.log(
-            f"Done: {best.beehouse_count} bh, "
+            f"{label}: {best.beehouse_count} bh, "
             f"{best.flower_count} fl ({best.pot_count} pt), "
             f"{best.tour_steps} steps -> {best_path}"
         )
