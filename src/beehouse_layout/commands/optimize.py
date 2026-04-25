@@ -212,6 +212,7 @@ def _run_parallel(
                 if improvement_msg:
                     dashboard.log(improvement_msg)
 
+    stopped_by_stagnation = False
     try:
         while any(p.is_alive() for p in processes):
             if stop_event.is_set():
@@ -228,7 +229,7 @@ def _run_parallel(
 
             if stagnation > 0:
                 if time.monotonic() - last_improvement_time >= stagnation:
-                    dashboard.log(f"Stopped: no improvement for {stagnation}s")
+                    stopped_by_stagnation = True
                     stop_event.set()
                     break
     finally:
@@ -248,6 +249,8 @@ def _run_parallel(
 
     if user_cancelled[0]:
         dashboard.log("Stopped by user")
+    elif stopped_by_stagnation:
+        dashboard.log(f"Stopped: no improvement for {stagnation}s")
 
     return best_so_far, user_cancelled[0]
 
