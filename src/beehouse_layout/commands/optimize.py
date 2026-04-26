@@ -17,6 +17,7 @@ from beehouse_layout.map.parser import parse_map
 from beehouse_layout.render.dashboard import Dashboard
 from beehouse_layout.render.layout import render_layout, save_layout
 from beehouse_layout.render.route import render_route
+from beehouse_layout.render.text import render_text, save_text
 from beehouse_layout.solver.annealing import anneal
 from beehouse_layout.solver.scoring import score_solution
 from beehouse_layout.solver.tile_info import TileInfo, precompute
@@ -287,7 +288,13 @@ def _run_parallel(
     default=False,
     help="Generate route overlay images alongside layouts.",
 )
-def optimize(map_file: str, duration: int, workers: int, stagnation: int, no_hard: bool, route: bool) -> None:
+@click.option(
+    "--text",
+    is_flag=True,
+    default=False,
+    help="Save a machine-readable text layout alongside the PNG.",
+)
+def optimize(map_file: str, duration: int, workers: int, stagnation: int, no_hard: bool, route: bool, text: bool) -> None:
     """Calculate optimal beehouse layout."""
     map_data = parse_map(map_file)
 
@@ -350,6 +357,9 @@ def optimize(map_file: str, duration: int, workers: int, stagnation: int, no_har
         best_path = str(OUTPUT_DIR / _slugify(map_data.name) / "best_layout.png")
         best_image, best_top_padding = render_layout(tile_info, best)
         save_layout(best_image, best_path)
+        if text:
+            text_path = best_path.replace(".png", ".txt")
+            save_text(render_text(tile_info, best), text_path)
         if route and not user_stopped:
             tour_path = compute_tour_path(tile_info, best.assignments)
             if tour_path.tiles:
