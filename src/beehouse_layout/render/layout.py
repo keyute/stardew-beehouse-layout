@@ -54,12 +54,7 @@ POT_Y_OFFSET = -15  # pot sprite extends 15px above tile (63 - 48)
 CROP_IN_POT_OFFSET = -16  # flower shifts up 16px when growing from pot
 CROP_ON_SOIL_OFFSET = -8  # flower shifts up so beehouse doesn't fully cover it
 
-# Metrics bar height
-METRICS_BAR_HEIGHT = 60
-
 # Legend bar
-LEGEND_BAR_HEIGHT = 40
-LEGEND_THUMB_SIZE = 20
 LEGEND_ITEMS: list[tuple[str, str]] = [
     ("Beehouse", BEEHOUSE_SPRITE),
     ("Fairy Rose", FLOWER_SPRITE),
@@ -125,23 +120,72 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> tuple[Image.Image,
     font = load_font(20)
     legend_font = load_font(14)
 
-    # Pre-calculate metrics text width
-    metrics_text = (
-        f"Beehouses: {solution.beehouse_count}  |  "
-        f"Flowers: {solution.flower_count} ({solution.pot_count} garden pots)  |  "
-        f"Steps: {solution.tour_steps}  |  "
-        f"Hard collect: {solution.obstacle_diagonal_count}"
-    )
-    metrics_bbox = font.getbbox(metrics_text)
-    metrics_w = metrics_bbox[2] - metrics_bbox[0]
+    # Pre-calculate metrics text — split into multiple lines if wider than grid
+    metrics_parts = [
+        f"Beehouses: {solution.beehouse_count}",
+        f"Flowers: {solution.flower_count} ({solution.pot_count} garden pots)",
+        f"Steps: {solution.tour_steps}",
+        f"Hard collect: {solution.obstacle_diagonal_count}",
+    ]
+    separator = "  |  "
+    single_line = separator.join(metrics_parts)
+    single_w = font.getbbox(single_line)[2] - font.getbbox(single_line)[0]
+    grid_w = width * TILE_SIZE
 
-    # Pre-calculate legend width
-    legend_padding = 12
-    legend_w = 0
-    for label, _ in LEGEND_ITEMS:
-        label_bbox = legend_font.getbbox(label)
-        legend_w += LEGEND_THUMB_SIZE + 4 + (label_bbox[2] - label_bbox[0]) + legend_padding
-    legend_w -= legend_padding
+    if single_w <= grid_w or len(metrics_parts) <= 1:
+        metrics_lines = [single_line]
+    else:
+        # Split into two roughly equal lines
+        mid = len(metrics_parts) // 2
+        metrics_lines = [
+            separator.join(metrics_parts[:mid]),
+            separator.join(metrics_parts[mid:]),
+        ]
+
+    line_height = font.getbbox("Ag")[3] - font.getbbox("Ag")[1]
+    metrics_bar_height = line_height * len(metrics_lines) + 12 * (len(metrics_lines) + 1)
+    metrics_w = max(
+        font.getbbox(line)[2] - font.getbbox(line)[0] for line in metrics_lines
+    )
+
+    # Determine which legend items are actually used
+    tile_type_values = set(tile_info.tile_type.values())
+    used_legend_labels: set[str] = set()
+    if solution.beehouse_count > 0:
+        used_legend_labels.add("Beehouse")
+    if solution.flower_count > 0:
+        used_legend_labels.add("Fairy Rose")
+    if solution.pot_count > 0:
+        used_legend_labels.add("Garden Pot")
+    if TILE_OBSTACLE in tile_type_values:
+        used_legend_labels.add("Obstacle")
+    if TILE_INTERACTABLE in tile_type_values:
+        used_legend_labels.add("Interactable")
+    if TILE_ENTRANCE in tile_type_values:
+        used_legend_labels.add("Entrance")
+    if TILE_WALKWAY in tile_type_values:
+        used_legend_labels.add("Walkway")
+
+    # Pre-load legend sprites at native size (only for used items)
+    legend_sprites = [
+        (label, _load_sprite(name))
+        for label, name in LEGEND_ITEMS
+        if label in used_legend_labels
+    ]
+
+    if legend_sprites:
+        legend_max_h = max(s.height for _, s in legend_sprites)
+        legend_bar_height = legend_max_h + 8  # 4px padding top+bottom
+        legend_padding = 12
+        legend_w = 0
+        for label, sprite in legend_sprites:
+            label_bbox = legend_font.getbbox(label)
+            legend_w += sprite.width + 4 + (label_bbox[2] - label_bbox[0]) + legend_padding
+        legend_w -= legend_padding
+    else:
+        legend_bar_height = 0
+        legend_padding = 12
+        legend_w = 0
 
     # Load sprites
     flower_sprite = _load_sprite(FLOWER_SPRITE)
@@ -157,7 +201,7 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> tuple[Image.Image,
     # Ensure image is wide enough for grid and metrics
     content_padding = 20
     img_w = max(width * TILE_SIZE, metrics_w + content_padding, legend_w + content_padding)
-    img_h = top_padding + height * TILE_SIZE + METRICS_BAR_HEIGHT + LEGEND_BAR_HEIGHT
+    img_h = top_padding + height * TILE_SIZE + metrics_bar_height + legend_bar_height
 
     image = Image.new("RGBA", (img_w, img_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
@@ -224,43 +268,45 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> tuple[Image.Image,
     # Pass 4: Draw metrics bar at bottom
     bar_y = top_padding + height * TILE_SIZE
     draw.rectangle(
-        [0, bar_y, img_w, bar_y + METRICS_BAR_HEIGHT],
+        [0, bar_y, img_w, bar_y + metrics_bar_height],
         fill=(40, 40, 40, 230),
     )
 
-    bbox = draw.textbbox((0, 0), metrics_text, font=font)
-    text_w = bbox[2] - bbox[0]
-    text_h = bbox[3] - bbox[1]
-    text_x = (img_w - text_w) // 2
-    text_y = bar_y + (METRICS_BAR_HEIGHT - text_h) // 2
-
-    draw.text((text_x, text_y), metrics_text, fill=(255, 255, 255, 255), font=font)
+    total_text_h = line_height * len(metrics_lines) + 12 * (len(metrics_lines) - 1)
+    text_y = bar_y + (metrics_bar_height - total_text_h) // 2
+    for line in metrics_lines:
+        lw = font.getbbox(line)[2] - font.getbbox(line)[0]
+        draw.text(
+            ((img_w - lw) // 2, text_y),
+            line,
+            fill=(255, 255, 255, 255),
+            font=font,
+        )
+        text_y += line_height + 12
 
     # Pass 5: Draw legend bar below metrics
-    legend_y = bar_y + METRICS_BAR_HEIGHT
-    draw.rectangle(
-        [0, legend_y, img_w, legend_y + LEGEND_BAR_HEIGHT],
-        fill=(40, 40, 40, 230),
-    )
-
-    lx = (img_w - legend_w) // 2
-    ly_center = legend_y + (LEGEND_BAR_HEIGHT - LEGEND_THUMB_SIZE) // 2
-
-    for label, sprite_name in LEGEND_ITEMS:
-        thumb = _load_sprite(sprite_name).resize(
-            (LEGEND_THUMB_SIZE, LEGEND_THUMB_SIZE), Image.LANCZOS
+    if legend_sprites:
+        legend_y = bar_y + metrics_bar_height
+        draw.rectangle(
+            [0, legend_y, img_w, legend_y + legend_bar_height],
+            fill=(40, 40, 40, 230),
         )
-        image.paste(thumb, (lx, ly_center), thumb)
-        lx += LEGEND_THUMB_SIZE + 4
-        label_bbox = draw.textbbox((0, 0), label, font=legend_font)
-        label_h = label_bbox[3] - label_bbox[1]
-        draw.text(
-            (lx, ly_center + (LEGEND_THUMB_SIZE - label_h) // 2),
-            label,
-            fill=(200, 200, 200, 255),
-            font=legend_font,
-        )
-        lx += (label_bbox[2] - label_bbox[0]) + legend_padding
+
+        lx = (img_w - legend_w) // 2
+
+        for label, sprite in legend_sprites:
+            sy = legend_y + (legend_bar_height - sprite.height) // 2
+            image.paste(sprite, (lx, sy), sprite)
+            lx += sprite.width + 4
+            label_bbox = draw.textbbox((0, 0), label, font=legend_font)
+            label_h = label_bbox[3] - label_bbox[1]
+            draw.text(
+                (lx, legend_y + (legend_bar_height - label_h) // 2),
+                label,
+                fill=(200, 200, 200, 255),
+                font=legend_font,
+            )
+            lx += (label_bbox[2] - label_bbox[0]) + legend_padding
 
     return image, top_padding
 
