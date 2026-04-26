@@ -311,7 +311,3 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> tuple[Image.Image,
     return image, top_padding
 
 
-def save_layout(image: Image.Image, path: str) -> None:
-    output = Path(path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    image.save(output)

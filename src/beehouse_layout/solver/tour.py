@@ -61,6 +61,94 @@ def _find_collection_points(
     return result
 
 
+def _setup_tour_data(
+    tile_info: TileInfo,
+    assignments: dict[tuple[int, int], TileState],
+) -> tuple[
+    set[tuple[int, int]],
+    dict[tuple[int, int], set[tuple[int, int]]],
+    dict[tuple[int, int], set[tuple[int, int]]],
+] | None:
+    """Common setup for tour functions.
+
+    Returns (walkable, collection_points, collector_to_beehouses) or None if
+    no valid tour is possible.
+    """
+    walkable = get_walkable_set(tile_info, assignments)
+    if not walkable:
+        return None
+
+    collection_points = _find_collection_points(tile_info, assignments, walkable)
+    if not collection_points:
+        return None
+
+    collector_to_beehouses: dict[tuple[int, int], set[tuple[int, int]]] = {}
+    for bh, collectors in collection_points.items():
+        for c in collectors:
+            collector_to_beehouses.setdefault(c, set()).add(bh)
+
+    return walkable, collection_points, collector_to_beehouses
+
+
+def _find_best_entrance(
+    tile_info: TileInfo,
+    walkable: set[tuple[int, int]],
+    *,
+    with_parents: bool = False,
+) -> tuple[
+    tuple[int, int] | None,
+    dict[tuple[int, int], int] | None,
+    dict[tuple[int, int], tuple[int, int] | None] | None,
+]:
+    """Find the entrance tile that can reach the most walkable tiles.
+
+    Returns (entrance, distances, parents). parents is None unless with_parents=True.
+    """
+    best_entrance = None
+    best_dist = None
+    best_parent = None
+    for e in tile_info.entrance_tiles:
+        if e not in walkable:
+            continue
+        if with_parents:
+            d, p = _bfs_with_parents(e, walkable, tile_info)
+        else:
+            d = _bfs_distances(e, walkable, tile_info)
+            p = None
+        if best_dist is None or len(d) > len(best_dist):
+            best_entrance = e
+            best_dist = d
+            best_parent = p
+    return best_entrance, best_dist, best_parent
+
+
+def _pick_nearest_collector(
+    collector_to_beehouses: dict[tuple[int, int], set[tuple[int, int]]],
+    uncollected: set[tuple[int, int]],
+    current_dist: dict[tuple[int, int], int],
+) -> tuple[tuple[int, int] | None, int, set[tuple[int, int]]]:
+    """Find the nearest walkable tile that collects at least one uncollected beehouse.
+
+    Returns (best_tile, distance, collected_beehouses). best_tile is None if
+    nothing is reachable.
+    """
+    best_tile = None
+    best_d = float("inf")
+    best_collected: set[tuple[int, int]] = set()
+
+    for tile, beehouses in collector_to_beehouses.items():
+        reachable_uncollected = beehouses & uncollected
+        if not reachable_uncollected:
+            continue
+        d = current_dist.get(tile, float("inf"))
+        if d < best_d:  # type: ignore[operator]
+            best_d = d
+            best_tile = tile
+            best_collected = reachable_uncollected
+
+    return best_tile, best_d, best_collected  # type: ignore[return-value]
+
+
 def compute_tour_steps(
     tile_info: TileInfo,
     assignments: dict[tuple[int, int], TileState],
@@ -70,32 +158,12 @@ def compute_tour_steps(
     Uses a greedy nearest-unvisited approach on walkable tiles.
     Each tile traversed counts as one step, including backtracking.
     """
-    walkable = get_walkable_set(tile_info, assignments)
-    if not walkable:
+    tour_data = _setup_tour_data(tile_info, assignments)
+    if tour_data is None:
         return 0
+    walkable, collection_points, collector_to_beehouses = tour_data
 
-    collection_points = _find_collection_points(tile_info, assignments, walkable)
-    if not collection_points:
-        return 0
-
-    # Find the set of walkable tiles that can collect at least one beehouse
-    collector_to_beehouses: dict[tuple[int, int], set[tuple[int, int]]] = {}
-    for bh, collectors in collection_points.items():
-        for c in collectors:
-            collector_to_beehouses.setdefault(c, set()).add(bh)
-
-    # Choose best entrance tile
-    best_entrance = None
-    best_entrance_dist = None
-    for e in tile_info.entrance_tiles:
-        if e in walkable:
-            d = _bfs_distances(e, walkable, tile_info)
-            if best_entrance_dist is None or (
-                len(d) > len(best_entrance_dist)  # type: ignore[arg-type]
-            ):
-                best_entrance = e
-                best_entrance_dist = d
-
+    best_entrance, best_entrance_dist, _ = _find_best_entrance(tile_info, walkable)
     if best_entrance is None or best_entrance_dist is None:
         return 0
 
@@ -106,21 +174,9 @@ def compute_tour_steps(
     current_dist = best_entrance_dist
 
     while uncollected:
-        # Find nearest walkable tile that collects at least one uncollected beehouse
-        best_tile = None
-        best_d = float("inf")
-        best_collected: set[tuple[int, int]] = set()
-
-        for tile, beehouses in collector_to_beehouses.items():
-            reachable_uncollected = beehouses & uncollected
-            if not reachable_uncollected:
-                continue
-            d = current_dist.get(tile, float("inf"))
-            if d < best_d:  # type: ignore[operator]
-                best_d = d
-                best_tile = tile
-                best_collected = reachable_uncollected
-
+        best_tile, best_d, best_collected = _pick_nearest_collector(
+            collector_to_beehouses, uncollected, current_dist,
+        )
         if best_tile is None:
             break
 
@@ -150,20 +206,9 @@ def _greedy_tour_stops(
     stops: list[tuple[int, int]] = []
 
     while uncollected:
-        best_tile = None
-        best_d = float("inf")
-        best_collected: set[tuple[int, int]] = set()
-
-        for tile, beehouses in collector_to_beehouses.items():
-            reachable_uncollected = beehouses & uncollected
-            if not reachable_uncollected:
-                continue
-            d = current_dist.get(tile, float("inf"))
-            if d < best_d:  # type: ignore[operator]
-                best_d = d
-                best_tile = tile
-                best_collected = reachable_uncollected
-
+        best_tile, _, best_collected = _pick_nearest_collector(
+            collector_to_beehouses, uncollected, current_dist,
+        )
         if best_tile is None:
             break
 
@@ -222,30 +267,13 @@ def optimize_tour(
     assignments: dict[tuple[int, int], TileState],
 ) -> int:
     """Compute tour steps with 2-opt improvement."""
-    walkable = get_walkable_set(tile_info, assignments)
-    if not walkable:
+    tour_data = _setup_tour_data(tile_info, assignments)
+    if tour_data is None:
         return 0
+    walkable, collection_points, collector_to_beehouses = tour_data
 
-    collection_points = _find_collection_points(tile_info, assignments, walkable)
-    if not collection_points:
-        return 0
-
-    collector_to_beehouses: dict[tuple[int, int], set[tuple[int, int]]] = {}
-    for bh, collectors in collection_points.items():
-        for c in collectors:
-            collector_to_beehouses.setdefault(c, set()).add(bh)
-
-    # Choose best entrance tile
-    best_entrance = None
-    best_entrance_dist = None
-    for e in tile_info.entrance_tiles:
-        if e in walkable:
-            d = _bfs_distances(e, walkable, tile_info)
-            if best_entrance_dist is None or len(d) > len(best_entrance_dist):
-                best_entrance = e
-                best_entrance_dist = d
-
-    if best_entrance is None or best_entrance_dist is None:
+    best_entrance, _, _ = _find_best_entrance(tile_info, walkable)
+    if best_entrance is None:
         return 0
 
     # Get greedy tour stops
@@ -314,56 +342,26 @@ def compute_tour_path(
     Returns TourPath with ordered tile positions and collection stop indices.
     Only called at render time, not during optimization.
     """
-    walkable = get_walkable_set(tile_info, assignments)
-    if not walkable:
+    tour_data = _setup_tour_data(tile_info, assignments)
+    if tour_data is None:
         return TourPath()
+    walkable, collection_points, collector_to_beehouses = tour_data
 
-    collection_points = _find_collection_points(tile_info, assignments, walkable)
-    if not collection_points:
-        return TourPath()
-
-    collector_to_beehouses: dict[tuple[int, int], set[tuple[int, int]]] = {}
-    for bh, collectors in collection_points.items():
-        for c in collectors:
-            collector_to_beehouses.setdefault(c, set()).add(bh)
-
-    # Choose best entrance tile
-    best_entrance = None
-    best_entrance_dist = None
-    best_entrance_parent = None
-    for e in tile_info.entrance_tiles:
-        if e in walkable:
-            d, p = _bfs_with_parents(e, walkable, tile_info)
-            if best_entrance_dist is None or len(d) > len(best_entrance_dist):
-                best_entrance = e
-                best_entrance_dist = d
-                best_entrance_parent = p
-
-    if best_entrance is None or best_entrance_dist is None or best_entrance_parent is None:
+    best_entrance, current_dist, current_parent = _find_best_entrance(
+        tile_info, walkable, with_parents=True,
+    )
+    if best_entrance is None or current_dist is None or current_parent is None:
         return TourPath()
 
     uncollected = set(collection_points.keys())
     current = best_entrance
-    current_dist = best_entrance_dist
-    current_parent = best_entrance_parent
     full_path: list[tuple[int, int]] = [best_entrance]
     collection_stops: list[int] = []
 
     while uncollected:
-        best_tile = None
-        best_d = float("inf")
-        best_collected: set[tuple[int, int]] = set()
-
-        for tile, beehouses in collector_to_beehouses.items():
-            reachable_uncollected = beehouses & uncollected
-            if not reachable_uncollected:
-                continue
-            d = current_dist.get(tile, float("inf"))
-            if d < best_d:
-                best_d = d
-                best_tile = tile
-                best_collected = reachable_uncollected
-
+        best_tile, _, best_collected = _pick_nearest_collector(
+            collector_to_beehouses, uncollected, current_dist,
+        )
         if best_tile is None:
             break
 

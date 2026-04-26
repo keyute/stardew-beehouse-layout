@@ -18,7 +18,8 @@ import click
 from beehouse_layout.commands.constants import OUTPUT_DIR
 from beehouse_layout.map.parser import parse_map
 from beehouse_layout.render.dashboard import Dashboard
-from beehouse_layout.render.layout import render_layout, save_layout
+from beehouse_layout.render.layout import render_layout
+from beehouse_layout.render.utils import save_image
 from beehouse_layout.render.route import render_route
 from beehouse_layout.render.text import render_text, save_text
 from beehouse_layout.solver.annealing import anneal
@@ -80,12 +81,12 @@ def _validate_and_save(
         return None
     image, top_padding = render_layout(tile_info, solution)
     path = _output_path(map_name, solution)
-    save_layout(image, path)
+    save_image(image, path)
     if route:
         tour_path = compute_tour_path(tile_info, solution.assignments)
         if tour_path.tiles:
             route_image = render_route(image, tour_path, top_padding)
-            save_layout(route_image, path.replace(".png", "_route.png"))
+            save_image(route_image, path.replace(".png", "_route.png"))
     return path
 
 
@@ -448,7 +449,7 @@ def optimize(
 
         best_path = str(OUTPUT_DIR / map_slug / "best_layout.png")
         best_image, best_top_padding = render_layout(tile_info, best)
-        save_layout(best_image, best_path)
+        save_image(best_image, best_path)
         if text:
             text_path = best_path.replace(".png", ".txt")
             save_text(render_text(tile_info, best), text_path)
@@ -456,7 +457,7 @@ def optimize(
             tour_path = compute_tour_path(tile_info, best.assignments)
             if tour_path.tiles:
                 route_image = render_route(best_image, tour_path, best_top_padding)
-                save_layout(route_image, best_path.replace(".png", "_route.png"))
+                save_image(route_image, best_path.replace(".png", "_route.png"))
 
         if stats and trajectory:
             stats_dir = OUTPUT_DIR / map_slug

@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from PIL import Image, ImageDraw
 
 from beehouse_layout.constants import (
@@ -104,7 +102,3 @@ def render_overlay(map_data: MapData) -> Image.Image:
     return image
 
 
-def save_overlay(image: Image.Image, path: str) -> None:
-    output = Path(path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    image.save(output)

@@ -3,7 +3,8 @@ from pathlib import Path
 import click
 
 from beehouse_layout.map.parser import parse_map
-from beehouse_layout.render.overlay import render_overlay, save_overlay
+from beehouse_layout.render.overlay import render_overlay
+from beehouse_layout.render.utils import save_image
 from beehouse_layout.commands.constants import OUTPUT_DIR
 from beehouse_layout.solver.constraints import check_entrance_connectivity
 from beehouse_layout.solver.tile_info import precompute
@@ -19,7 +20,7 @@ def validate(map_file: str) -> None:
 
     stem = Path(map_file).stem
     output_path = f"{OUTPUT_DIR}/{stem}{_OVERLAY_SUFFIX}"
-    save_overlay(image, output_path)
+    save_image(image, output_path)
     click.echo(f"Overlay saved to {output_path}")
 
     # Check entrance connectivity
