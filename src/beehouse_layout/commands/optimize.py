@@ -2,7 +2,6 @@ import multiprocessing
 import os
 import queue
 import random
-import re
 import shutil
 import signal
 import time
@@ -49,20 +48,14 @@ def _make_sigint_handler(
     return handler
 
 
-def _slugify(name: str) -> str:
-    """Convert map name to filesystem-safe slug."""
-    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
-
-
-def _output_path(map_name: str, solution: Solution) -> str:
-    slug = _slugify(map_name)
+def _output_path(map_slug: str, solution: Solution) -> str:
     filename = (
         f"{solution.beehouse_count}bh_"
         f"{solution.flower_count}fl_"
         f"{solution.pot_count}pt_"
         f"{solution.tour_steps}st"
     )
-    base = OUTPUT_DIR / slug / filename
+    base = OUTPUT_DIR / map_slug / filename
     path = base.with_suffix(".png")
 
     # Handle duplicate names
@@ -297,12 +290,13 @@ def _run_parallel(
 def optimize(map_file: str, duration: int, workers: int, stagnation: int, no_hard: bool, route: bool, text: bool) -> None:
     """Calculate optimal beehouse layout."""
     map_data = parse_map(map_file)
+    map_slug = Path(map_file).stem
 
     with Dashboard(workers) as dashboard:
         dashboard.log(f"Map: {map_data.name}")
 
         # Clear previous outputs for this map
-        output_dir = OUTPUT_DIR / _slugify(map_data.name)
+        output_dir = OUTPUT_DIR / map_slug
         if output_dir.exists():
             shutil.rmtree(output_dir)
             dashboard.log(f"Cleared {output_dir}/")
@@ -326,7 +320,7 @@ def optimize(map_file: str, duration: int, workers: int, stagnation: int, no_har
         tour_steps = optimize_tour(tile_info, assignments)
         greedy_solution = score_solution(tile_info, assignments, tour_steps)
 
-        path = _validate_and_save(tile_info, greedy_solution, map_data.name, no_hard=no_hard, route=route)
+        path = _validate_and_save(tile_info, greedy_solution, map_slug, no_hard=no_hard, route=route)
         if path:
             dashboard.log(
                 f"  Greedy: {greedy_solution.beehouse_count} bh, "
@@ -350,11 +344,11 @@ def optimize(map_file: str, duration: int, workers: int, stagnation: int, no_har
         dashboard.log(f"SA: {', '.join(stop_label)}")
 
         best, user_stopped = _run_parallel(
-            tile_info, assignments, sa_duration, greedy_solution, map_data.name,
+            tile_info, assignments, sa_duration, greedy_solution, map_slug,
             workers, stagnation, dashboard, no_hard=no_hard, route=route,
         )
 
-        best_path = str(OUTPUT_DIR / _slugify(map_data.name) / "best_layout.png")
+        best_path = str(OUTPUT_DIR / map_slug / "best_layout.png")
         best_image, best_top_padding = render_layout(tile_info, best)
         save_layout(best_image, best_path)
         if text:

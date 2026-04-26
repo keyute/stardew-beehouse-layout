@@ -1,0 +1,22 @@
+name: Sprinkler
+legend:
+  ".": path
+  E: entrance
+  S: soil
+  X: obstacle
+map: |-
+  EEEEEEEEEEEEEEE
+  E.............E
+  E.............E
+  E.............E
+  E.............E
+  E.............E
+  E......S......E
+  E.....SXS.....E
+  E......S......E
+  E.............E
+  E.............E
+  E.............E
+  E.............E
+  E.............E
+  EEEEEEEEEEEEEEE
