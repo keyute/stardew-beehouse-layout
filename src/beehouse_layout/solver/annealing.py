@@ -19,7 +19,7 @@ from beehouse_layout.solver.greedy import _rollback, _try_place_flower_group
 from beehouse_layout.solver.scoring import score_solution
 from beehouse_layout.solver.tile_info import TileInfo, is_walkable
 from beehouse_layout.solver.tour import optimize_tour
-from beehouse_layout.solver.types import Solution, TileState
+from beehouse_layout.solver.types import AnnealStats, MoveStats, Solution, TileState
 from beehouse_layout.solver.validator import cleanup_assignments
 
 # SA parameters
@@ -528,10 +528,15 @@ def anneal(
     duration_secs: float = 300.0,
     on_improvement: Callable[[Solution], None] | None = None,
     on_progress: Callable[[int, float, float, int, int], None] | None = None,
+    on_stats: Callable[[dict], None] | None = None,
     stop_event: multiprocessing.synchronize.Event | None = None,
     *,
     no_hard: bool = False,
-) -> Solution:
+    initial_temp: float | None = None,
+    cooling_rate: float | None = None,
+    min_temp: float | None = None,
+    max_iterations: int = 0,
+) -> tuple[Solution, AnnealStats]:
     """Run simulated annealing to improve the layout.
 
     Args:
@@ -540,19 +545,28 @@ def anneal(
         duration_secs: Maximum time to run in seconds.
         on_improvement: Callback when a new best solution is found.
         on_progress: Callback(iterations, elapsed, temp, bh_count, improvements).
+        on_stats: Callback for trajectory snapshots (dict with stats fields).
         stop_event: If set, signals the annealing loop to stop.
         no_hard: If True, reject solutions with hard-to-access beehouses.
+        initial_temp: Override initial temperature.
+        cooling_rate: Override cooling rate.
+        min_temp: Override minimum temperature before reheat.
+        max_iterations: Stop after this many iterations (0 = unlimited).
 
     Returns:
-        Best solution found.
+        Tuple of (best solution, anneal statistics).
     """
+    sa_initial_temp = initial_temp if initial_temp is not None else INITIAL_TEMP
+    sa_cooling_rate = cooling_rate if cooling_rate is not None else COOLING_RATE
+    sa_min_temp = min_temp if min_temp is not None else MIN_TEMP
+
     assignments = dict(initial_assignments)
     current_score = _quick_score(tile_info, assignments)
 
     best_assignments = dict(assignments)
     best_score = current_score
 
-    temp = INITIAL_TEMP
+    temp = sa_initial_temp
     start_time = time.monotonic()
     last_report = start_time
     iterations = 0
@@ -561,17 +575,27 @@ def anneal(
     move_names = [m[0] for m in SA_MOVES]
     move_weights = [m[1] for m in SA_MOVES]
 
+    # Per-move tracking
+    move_stats: dict[str, MoveStats] = {name: MoveStats() for name in move_names}
+    # Acceptance tracking for trajectory snapshots
+    interval_accepts = 0
+    interval_rejects = 0
+
     while True:
         elapsed = time.monotonic() - start_time
         if elapsed >= duration_secs:
             break
+        if max_iterations > 0 and iterations >= max_iterations:
+            break
         if stop_event is not None and stop_event.is_set():
             break
-        if temp < MIN_TEMP:
-            temp = INITIAL_TEMP  # reheat
+        if temp < sa_min_temp:
+            temp = sa_initial_temp  # reheat
 
         # Pick a random move (each returns changeset on success, None on failure)
         move = random.choices(move_names, weights=move_weights, k=1)[0]
+        ms = move_stats[move]
+        ms.attempts += 1
 
         changeset = None
         if move == "add_beehouse":
@@ -593,19 +617,23 @@ def anneal(
 
         if changeset is None:
             iterations += 1
-            temp *= COOLING_RATE
+            temp *= sa_cooling_rate
             continue
 
+        ms.valid += 1
         new_score = _quick_score(tile_info, assignments)
         delta = new_score - current_score
 
         # Accept or reject
         if delta > 0 or random.random() < math.exp(delta / temp):
+            ms.accepted += 1
+            interval_accepts += 1
             current_score = new_score
             if new_score > best_score:
                 best_score = new_score
                 best_assignments = dict(assignments)
                 improvements += 1
+                ms.improvements += 1
 
                 if on_improvement is not None:
                     # Pass a copy so callback doesn't mutate SA state
@@ -613,6 +641,8 @@ def anneal(
                     solution = score_solution(tile_info, best_assignments, tour_steps)
                     on_improvement(solution)
         else:
+            ms.rejected += 1
+            interval_rejects += 1
             # Rollback using targeted changeset instead of full dict copy
             _rollback(assignments, changeset)
 
@@ -627,6 +657,23 @@ def anneal(
                     1 for s in assignments.values() if s == TileState.BEEHOUSE
                 )
                 on_progress(iterations, elapsed, temp, bh_count, improvements)
+
+            if on_stats is not None:
+                total_decisions = interval_accepts + interval_rejects
+                acceptance_rate = interval_accepts / total_decisions if total_decisions > 0 else 0.0
+                on_stats({
+                    "iteration": iterations,
+                    "elapsed_secs": round(elapsed, 2),
+                    "temperature": round(temp, 4),
+                    "current_score": current_score,
+                    "best_score": best_score,
+                    "acceptance_rate": round(acceptance_rate, 4),
+                    "beehouse_count": sum(1 for s in assignments.values() if s == TileState.BEEHOUSE),
+                    "improvements": improvements,
+                })
+                interval_accepts = 0
+                interval_rejects = 0
+
             last_report = now
 
         # Periodic cleanup to prevent invalid state accumulation
@@ -639,4 +686,5 @@ def anneal(
 
     # Final scoring with tour
     tour_steps = optimize_tour(tile_info, best_assignments)
-    return score_solution(tile_info, best_assignments, tour_steps)
+    stats = AnnealStats(move_stats=move_stats)
+    return score_solution(tile_info, best_assignments, tour_steps), stats

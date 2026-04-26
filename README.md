@@ -39,14 +39,26 @@ Usage: beehouse optimize [OPTIONS] MAP_FILE
   Calculate optimal beehouse layout.
 
 Options:
-  --duration INTEGER    Optimization duration in seconds (0 = unlimited).
-  --workers INTEGER     Number of parallel SA processes.
-  --stagnation INTEGER  Auto-stop after N seconds without improvement (0 =
-                        disabled).
-  --no-hard             Reject solutions with hard-to-access beehouses (near
-                        interactable obstacles).
-  --route               Generate route overlay images alongside layouts.
-  --help                Show this message and exit.
+  --duration INTEGER        Optimization duration in seconds (0 = unlimited).
+  --workers INTEGER         Number of parallel SA processes.
+  --stagnation INTEGER      Auto-stop after N seconds without improvement (0 =
+                            disabled).
+  --no-hard                 Reject solutions with hard-to-access beehouses
+                            (near interactable obstacles).
+  --route                   Generate route overlay images alongside layouts.
+  --text                    Save a machine-readable text layout alongside the
+                            PNG.
+  --seed INTEGER            Random seed for reproducible runs.
+  --stats                   Write SA trajectory CSV and move statistics JSON.
+  --temp FLOAT              Override SA initial temperature (default: 100.0).
+  --cooling-rate FLOAT      Override SA cooling rate (default: 0.9999).
+  --min-temp FLOAT          Override SA minimum temperature before reheat
+                            (default: 0.01).
+  --max-iterations INTEGER  Stop each worker after N iterations (0 =
+                            unlimited). Enables deterministic runs with
+                            --seed.
+  -v, --verbose             Enable debug logging for greedy construction.
+  --help                    Show this message and exit.
 ```
 
 ## Map format
@@ -116,4 +128,3 @@ online.
 ## Attributions
 
 All assets are fetched from the Stardew Valley wiki.
-

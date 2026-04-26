@@ -1,3 +1,6 @@
+import csv
+import json
+import logging
 import multiprocessing
 import os
 import queue
@@ -6,6 +9,7 @@ import shutil
 import signal
 import time
 from collections.abc import Callable
+from dataclasses import asdict
 from pathlib import Path
 from types import FrameType
 
@@ -21,7 +25,7 @@ from beehouse_layout.solver.annealing import anneal
 from beehouse_layout.solver.scoring import score_solution
 from beehouse_layout.solver.tile_info import TileInfo, precompute
 from beehouse_layout.solver.tour import compute_tour_path, optimize_tour
-from beehouse_layout.solver.types import Solution, WorkerStatus
+from beehouse_layout.solver.types import AnnealStats, Solution, WorkerStatus
 from beehouse_layout.solver.constraints import check_entrance_connectivity
 from beehouse_layout.solver.validator import cleanup_assignments, validate_solution
 from beehouse_layout.solver.greedy import build_greedy
@@ -125,6 +129,11 @@ def _sa_worker(
     stop_event: multiprocessing.Event,
     *,
     no_hard: bool = False,
+    stats: bool = False,
+    initial_temp: float | None = None,
+    cooling_rate: float | None = None,
+    min_temp: float | None = None,
+    max_iterations: int = 0,
 ) -> None:
     """SA worker process. Sends improvements and status to the queue."""
     signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -143,15 +152,25 @@ def _sa_worker(
             improvements=improvements,
         ))
 
-    anneal(
+    def on_stats(snapshot: dict) -> None:
+        snapshot["worker_id"] = worker_id
+        result_queue.put(("stats_snapshot", snapshot))
+
+    _, anneal_stats = anneal(
         tile_info,
         initial_assignments,
         duration_secs=duration_secs,
         on_improvement=on_improvement,
         on_progress=on_progress,
+        on_stats=on_stats if stats else None,
         stop_event=stop_event,
         no_hard=no_hard,
+        initial_temp=initial_temp,
+        cooling_rate=cooling_rate,
+        min_temp=min_temp,
+        max_iterations=max_iterations,
     )
+    result_queue.put(("anneal_stats", worker_id, anneal_stats))
 
 
 def _run_parallel(
@@ -166,22 +185,33 @@ def _run_parallel(
     *,
     no_hard: bool = False,
     route: bool = False,
-) -> tuple[Solution, bool]:
+    stats: bool = False,
+    initial_temp: float | None = None,
+    cooling_rate: float | None = None,
+    min_temp: float | None = None,
+    max_iterations: int = 0,
+) -> tuple[Solution, bool, list[dict], dict[int, AnnealStats]]:
     """Run SA across multiple processes with a live dashboard.
 
-    Returns (best_solution, user_stopped).
+    Returns (best_solution, user_stopped, trajectory_snapshots, worker_anneal_stats).
     """
     result_queue: multiprocessing.Queue = multiprocessing.Queue()
     stop_event = multiprocessing.Event()
     user_cancelled: list[bool] = [False]
     processes: list[multiprocessing.Process] = []
+    trajectory: list[dict] = []
+    worker_anneal_stats: dict[int, AnnealStats] = {}
 
     for i in range(workers):
         seed = random.randint(0, MAX_SEED)
         p = multiprocessing.Process(
             target=_sa_worker,
             args=(tile_info, assignments, sa_duration, seed, i, result_queue, stop_event),
-            kwargs={"no_hard": no_hard},
+            kwargs={
+                "no_hard": no_hard, "stats": stats,
+                "initial_temp": initial_temp, "cooling_rate": cooling_rate, "min_temp": min_temp,
+                "max_iterations": max_iterations,
+            },
         )
         p.start()
         processes.append(p)
@@ -191,7 +221,7 @@ def _run_parallel(
 
     last_improvement_time = time.monotonic()
 
-    def _handle_msg(msg: WorkerStatus | Solution) -> None:
+    def _handle_msg(msg: object) -> None:
         nonlocal best_so_far, last_improvement_time
         if isinstance(msg, WorkerStatus):
             dashboard.update_worker(msg)
@@ -205,6 +235,11 @@ def _run_parallel(
                 dashboard.update_best(best_so_far)
                 if improvement_msg:
                     dashboard.log(improvement_msg)
+        elif isinstance(msg, tuple):
+            if msg[0] == "stats_snapshot":
+                trajectory.append(msg[1])
+            elif msg[0] == "anneal_stats":
+                worker_anneal_stats[msg[1]] = msg[2]
 
     stopped_by_stagnation = False
     try:
@@ -229,11 +264,15 @@ def _run_parallel(
     finally:
         stop_event.set()
         signal.signal(signal.SIGINT, old_sigint)
+        # Let workers finish gracefully (they need to send final stats)
         for p in processes:
-            p.terminate()
+            p.join(timeout=5)
+        # Force-kill any that didn't exit in time
         for p in processes:
-            p.join(timeout=2)
-        # Drain remaining messages to capture any final improvements
+            if p.is_alive():
+                p.terminate()
+                p.join(timeout=2)
+        # Drain remaining messages to capture final improvements and stats
         if not user_cancelled[0]:
             while True:
                 try:
@@ -246,7 +285,7 @@ def _run_parallel(
     elif stopped_by_stagnation:
         dashboard.log(f"Stopped: no improvement for {stagnation}s")
 
-    return best_so_far, user_cancelled[0]
+    return best_so_far, user_cancelled[0], trajectory, worker_anneal_stats
 
 
 @click.command()
@@ -287,8 +326,65 @@ def _run_parallel(
     default=False,
     help="Save a machine-readable text layout alongside the PNG.",
 )
-def optimize(map_file: str, duration: int, workers: int, stagnation: int, no_hard: bool, route: bool, text: bool) -> None:
+@click.option(
+    "--seed",
+    default=None,
+    type=int,
+    help="Random seed for reproducible runs.",
+)
+@click.option(
+    "--stats",
+    is_flag=True,
+    default=False,
+    help="Write SA trajectory CSV and move statistics JSON.",
+)
+@click.option(
+    "--temp",
+    default=None,
+    type=float,
+    help="Override SA initial temperature (default: 100.0).",
+)
+@click.option(
+    "--cooling-rate",
+    default=None,
+    type=float,
+    help="Override SA cooling rate (default: 0.9999).",
+)
+@click.option(
+    "--min-temp",
+    default=None,
+    type=float,
+    help="Override SA minimum temperature before reheat (default: 0.01).",
+)
+@click.option(
+    "--max-iterations",
+    default=0,
+    type=int,
+    help="Stop each worker after N iterations (0 = unlimited). Enables deterministic runs with --seed.",
+)
+@click.option(
+    "-v", "--verbose",
+    is_flag=True,
+    default=False,
+    help="Enable debug logging for greedy construction.",
+)
+def optimize(
+    map_file: str, duration: int, workers: int, stagnation: int,
+    no_hard: bool, route: bool, text: bool, seed: int | None, stats: bool,
+    temp: float | None, cooling_rate: float | None, min_temp: float | None,
+    max_iterations: int, verbose: bool,
+) -> None:
     """Calculate optimal beehouse layout."""
+    if verbose:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(name)s: %(message)s"))
+        pkg_logger = logging.getLogger("beehouse_layout")
+        pkg_logger.setLevel(logging.DEBUG)
+        pkg_logger.addHandler(handler)
+
+    if seed is not None:
+        random.seed(seed)
+
     map_data = parse_map(map_file)
     map_slug = Path(map_file).stem
 
@@ -343,9 +439,11 @@ def optimize(map_file: str, duration: int, workers: int, stagnation: int, no_har
             stop_label.append("Ctrl+C to stop")
         dashboard.log(f"SA: {', '.join(stop_label)}")
 
-        best, user_stopped = _run_parallel(
+        best, user_stopped, trajectory, worker_anneal_stats = _run_parallel(
             tile_info, assignments, sa_duration, greedy_solution, map_slug,
-            workers, stagnation, dashboard, no_hard=no_hard, route=route,
+            workers, stagnation, dashboard, no_hard=no_hard, route=route, stats=stats,
+            initial_temp=temp, cooling_rate=cooling_rate, min_temp=min_temp,
+            max_iterations=max_iterations,
         )
 
         best_path = str(OUTPUT_DIR / map_slug / "best_layout.png")
@@ -359,6 +457,31 @@ def optimize(map_file: str, duration: int, workers: int, stagnation: int, no_har
             if tour_path.tiles:
                 route_image = render_route(best_image, tour_path, best_top_padding)
                 save_layout(route_image, best_path.replace(".png", "_route.png"))
+
+        if stats and trajectory:
+            stats_dir = OUTPUT_DIR / map_slug
+            # Write trajectory CSV
+            csv_path = str(stats_dir / "trajectory.csv")
+            fieldnames = ["worker_id", "iteration", "elapsed_secs", "temperature",
+                          "current_score", "best_score", "acceptance_rate",
+                          "beehouse_count", "improvements"]
+            with open(csv_path, "w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                for row in sorted(trajectory, key=lambda r: (r["worker_id"], r["iteration"])):
+                    writer.writerow(row)
+            dashboard.log(f"Trajectory: {csv_path}")
+
+            # Write move stats JSON
+            json_path = str(stats_dir / "move_stats.json")
+            all_move_stats = {}
+            for wid, astats in sorted(worker_anneal_stats.items()):
+                all_move_stats[f"worker_{wid}"] = {
+                    name: asdict(ms) for name, ms in astats.move_stats.items()
+                }
+            with open(json_path, "w") as f:
+                json.dump(all_move_stats, f, indent=2)
+            dashboard.log(f"Move stats: {json_path}")
 
         label = "Stopped" if user_stopped else "Done"
         dashboard.log(

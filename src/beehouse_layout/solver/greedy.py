@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from collections import deque
+
+logger = logging.getLogger(__name__)
 
 from beehouse_layout.solver.constants import BEEHOUSE_TILES
 from beehouse_layout.solver.constraints import (
@@ -272,15 +275,22 @@ def build_greedy(tile_info: TileInfo, *, no_hard: bool = False) -> dict[tuple[in
 
     # Step 1: Place multi-flower groups (adjacent flowers shield each other)
     components = _find_flower_components(tile_info, assignments)
+    logger.debug("Found %d flower components", len(components))
+    groups_placed = 0
     for component in sorted(components, key=len, reverse=True):
         filtered = _filter_shieldable(component, tile_info, assignments)
+        logger.debug("Component size=%d, shieldable=%d", len(component), len(filtered))
         if len(filtered) < MIN_FLOWER_GROUP_SIZE:
+            logger.debug("  Skipped: below min group size %d", MIN_FLOWER_GROUP_SIZE)
             continue
         # Try placing the full filtered group
         if _try_place_flower_group(filtered, tile_info, assignments, no_hard=no_hard):
+            groups_placed += 1
+            logger.debug("  Placed full group of %d flowers", len(filtered))
             continue
         # Shrink by removing periphery tiles (fewest in-group neighbors) and retry
         shrinkable = set(filtered)
+        placed = False
         for _ in range(min(MAX_SHRINK_ATTEMPTS, len(shrinkable))):
             if len(shrinkable) < MIN_FLOWER_GROUP_SIZE:
                 break
@@ -291,7 +301,13 @@ def build_greedy(tile_info: TileInfo, *, no_hard: bool = False) -> dict[tuple[in
             )
             shrinkable.discard(worst)
             if _try_place_flower_group(shrinkable, tile_info, assignments, no_hard=no_hard):
+                groups_placed += 1
+                logger.debug("  Placed shrunk group of %d flowers (from %d)", len(shrinkable), len(filtered))
+                placed = True
                 break
+        if not placed:
+            logger.debug("  Failed to place group after shrinking")
+    logger.debug("Step 1 done: placed %d multi-flower groups", groups_placed)
 
     # Step 2: Place remaining single flower clusters greedily by coverage
     candidates = sorted(
@@ -300,15 +316,19 @@ def build_greedy(tile_info: TileInfo, *, no_hard: bool = False) -> dict[tuple[in
         reverse=True,
     )
 
+    singles_placed = 0
     for pos in candidates:
         if assignments.get(pos, TileState.EMPTY) != TileState.EMPTY:
             continue
-        _try_place_cluster(pos, tile_info, assignments, no_hard=no_hard)
+        if _try_place_cluster(pos, tile_info, assignments, no_hard=no_hard):
+            singles_placed += 1
+    logger.debug("Step 2 done: placed %d single flower clusters", singles_placed)
 
     # Step 3: Fill additional beehouses near existing flowers
     flower_positions = [
         pos for pos, state in assignments.items() if state == TileState.FLOWER
     ]
+    bh_before = sum(1 for s in assignments.values() if s == TileState.BEEHOUSE)
     for flower_pos in flower_positions:
         for nb in tile_info.flower_diamond[flower_pos]:
             if nb not in tile_info.beehouse_tiles:
@@ -339,6 +359,13 @@ def build_greedy(tile_info: TileInfo, *, no_hard: bool = False) -> dict[tuple[in
             # Must maintain connectivity (single tile — fast-path effective)
             if not check_connectivity(tile_info, assignments, removed_walkable={nb}):
                 del assignments[nb]
+
+    bh_after = sum(1 for s in assignments.values() if s == TileState.BEEHOUSE)
+    logger.debug("Step 3 done: filled %d additional beehouses", bh_after - bh_before)
+
+    total_bh = sum(1 for s in assignments.values() if s == TileState.BEEHOUSE)
+    total_fl = sum(1 for s in assignments.values() if s == TileState.FLOWER)
+    logger.debug("Greedy complete: %d beehouses, %d flowers", total_bh, total_fl)
 
     return assignments
 

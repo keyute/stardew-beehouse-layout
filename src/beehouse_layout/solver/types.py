@@ -27,3 +27,18 @@ class Solution:
     tour_steps: int = 0
     obstacle_diagonal_count: int = 0
     score: float = 0.0
+
+
+@dataclass
+class MoveStats:
+    attempts: int = 0
+    valid: int = 0
+    accepted: int = 0
+    rejected: int = 0
+    improvements: int = 0
+
+
+@dataclass
+class AnnealStats:
+    move_stats: dict[str, MoveStats] = field(default_factory=dict)
+    trajectory: list[dict] = field(default_factory=list)
