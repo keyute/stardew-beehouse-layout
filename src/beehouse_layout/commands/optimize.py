@@ -29,7 +29,7 @@ from beehouse_layout.solver.tour import compute_tour_path, optimize_tour
 from beehouse_layout.solver.types import AnnealStats, Solution, WorkerStatus
 from beehouse_layout.solver.constraints import check_entrance_connectivity
 from beehouse_layout.solver.validator import cleanup_assignments, validate_solution
-from beehouse_layout.solver.greedy import build_greedy
+from beehouse_layout.solver.greedy import build_greedy, exhaustive_fill
 
 MAX_SEED = 2**63
 
@@ -421,6 +421,8 @@ def optimize(
         dashboard.log("Greedy construction...")
         assignments = build_greedy(tile_info, no_hard=no_hard)
         cleanup_assignments(tile_info, assignments)
+        exhaustive_fill(tile_info, assignments, no_hard=no_hard)
+        cleanup_assignments(tile_info, assignments)
         tour_steps = optimize_tour(tile_info, assignments)
         greedy_solution = score_solution(tile_info, assignments, tour_steps)
 
@@ -453,6 +455,20 @@ def optimize(
             initial_temp=temp, cooling_rate=cooling_rate, min_temp=min_temp,
             max_iterations=max_iterations,
         )
+
+        # Post-SA exhaustive fill to catch remaining beehouses
+        post_assignments = dict(best.assignments)
+        exhaustive_fill(tile_info, post_assignments, no_hard=no_hard)
+        cleanup_assignments(tile_info, post_assignments)
+        post_tour = optimize_tour(tile_info, post_assignments)
+        post_solution = score_solution(tile_info, post_assignments, post_tour)
+        if post_solution.score > best.score:
+            best = post_solution
+            dashboard.log(
+                f"  Fill: {best.beehouse_count} bh, "
+                f"{best.flower_count} fl ({best.pot_count} pt), "
+                f"{best.tour_steps} steps"
+            )
 
         best_path = str(OUTPUT_DIR / map_slug / "best_layout.png")
         best_image, best_top_padding = render_layout(tile_info, best)

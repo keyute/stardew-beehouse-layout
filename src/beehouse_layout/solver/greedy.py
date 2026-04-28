@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import random
 from collections import deque
 
 logger = logging.getLogger(__name__)
@@ -15,6 +16,7 @@ from beehouse_layout.solver.constraints import (
     classify_beehouse_access,
 )
 from beehouse_layout.solver.tile_info import TileInfo
+from beehouse_layout.solver.tour import compute_tour_steps
 from beehouse_layout.solver.types import TileState
 
 # Greedy solver parameters
@@ -390,6 +392,95 @@ def _fix_connectivity(
             break
         if assignments.get(pos) == TileState.BEEHOUSE:
             del assignments[pos]
+
+
+def exhaustive_fill(
+    tile_info: TileInfo,
+    assignments: dict[tuple[int, int], TileState],
+    *,
+    no_hard: bool = False,
+    attempts: int = 100,
+) -> None:
+    """Fill beehouse positions by trying many random orderings from a clean base.
+
+    Strips all non-shield beehouses (those not adjacent to a flower) and refills
+    from scratch. This explores different corridor topologies that a single
+    greedy ordering cannot. Updates assignments in-place with the best result.
+    """
+    # Identify shield beehouses (adjacent to at least one flower)
+    shield_beehouses: set[tuple[int, int]] = set()
+    for pos, state in assignments.items():
+        if state == TileState.FLOWER:
+            for nb in tile_info.all_neighbors[pos]:
+                if assignments.get(nb) == TileState.BEEHOUSE:
+                    shield_beehouses.add(nb)
+
+    # Build base: flowers + shields only
+    base: dict[tuple[int, int], TileState] = {}
+    for pos, state in assignments.items():
+        if state == TileState.FLOWER or (state == TileState.BEEHOUSE and pos in shield_beehouses):
+            base[pos] = state
+
+    # Candidates: empty beehouse tiles with flower coverage relative to base
+    candidates = [
+        pos
+        for pos in tile_info.beehouse_tiles
+        if base.get(pos, TileState.EMPTY) == TileState.EMPTY
+        and any(base.get(nb) == TileState.FLOWER for nb in tile_info.flower_diamond[pos])
+    ]
+    if not candidates:
+        return
+
+    best_count = sum(1 for s in assignments.values() if s == TileState.BEEHOUSE)
+    best_steps = float("inf")
+    best_assignments: dict[tuple[int, int], TileState] | None = None
+
+    for _ in range(attempts):
+        trial = dict(base)
+        random.shuffle(candidates)
+
+        for pos in candidates:
+            if trial.get(pos, TileState.EMPTY) != TileState.EMPTY:
+                continue
+            trial[pos] = TileState.BEEHOUSE
+
+            access = classify_beehouse_access(pos, tile_info, trial)
+            if access is None or (no_hard and access == "hard"):
+                del trial[pos]
+                continue
+
+            neighbor_ok = True
+            for nb in tile_info.all_neighbors[pos]:
+                if trial.get(nb) == TileState.BEEHOUSE:
+                    nb_access = classify_beehouse_access(nb, tile_info, trial)
+                    if nb_access is None or (no_hard and nb_access == "hard"):
+                        neighbor_ok = False
+                        break
+            if not neighbor_ok:
+                del trial[pos]
+                continue
+
+            if not check_connectivity(tile_info, trial, removed_walkable={pos}):
+                del trial[pos]
+
+        # Full connectivity validation — incremental checks can miss cumulative disconnections
+        if not check_connectivity(tile_info, trial):
+            continue
+
+        count = sum(1 for s in trial.values() if s == TileState.BEEHOUSE)
+        if count > best_count:
+            best_count = count
+            best_steps = compute_tour_steps(tile_info, trial)
+            best_assignments = trial
+        elif count == best_count:
+            steps = compute_tour_steps(tile_info, trial)
+            if steps < best_steps:
+                best_steps = steps
+                best_assignments = trial
+
+    if best_assignments is not None:
+        assignments.clear()
+        assignments.update(best_assignments)
 
 
 def _remove_unsafe_flowers(
