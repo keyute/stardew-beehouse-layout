@@ -265,14 +265,21 @@ def _run_parallel(
     finally:
         stop_event.set()
         signal.signal(signal.SIGINT, old_sigint)
-        # Let workers finish gracefully (they need to send final stats)
-        for p in processes:
-            p.join(timeout=5)
-        # Force-kill any that didn't exit in time
-        for p in processes:
-            if p.is_alive():
+        if user_cancelled[0]:
+            # User cancelled — kill workers immediately
+            for p in processes:
                 p.terminate()
+            for p in processes:
                 p.join(timeout=2)
+        else:
+            # Normal/stagnation exit — let workers send final stats
+            for p in processes:
+                p.join(timeout=5)
+            # Force-kill any that didn't exit in time
+            for p in processes:
+                if p.is_alive():
+                    p.terminate()
+                    p.join(timeout=2)
         # Drain remaining messages to capture final improvements and stats
         if not user_cancelled[0]:
             while True:
