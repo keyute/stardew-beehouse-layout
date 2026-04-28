@@ -50,16 +50,6 @@ def render_route(base_image: Image.Image, tour_path: TourPath, top_padding: int)
     for i in range(len(centers) - 1):
         draw.line([centers[i], centers[i + 1]], fill=PATH_LINE_COLOR, width=LINE_WIDTH)
 
-    # Draw start marker
-    sx, sy = centers[0]
-    draw.ellipse(
-        [sx - STOP_RADIUS, sy - STOP_RADIUS, sx + STOP_RADIUS, sy + STOP_RADIUS],
-        fill=START_COLOR,
-    )
-    bbox = draw.textbbox((0, 0), "S", font=font)
-    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    draw.text((sx - tw // 2, sy - th // 2), "S", fill=STOP_TEXT_COLOR, font=font)
-
     # Draw numbered collection stops
     for i, stop_idx in enumerate(tour_path.collection_stops, start=1):
         cx, cy = centers[stop_idx]
@@ -71,6 +61,16 @@ def render_route(base_image: Image.Image, tour_path: TourPath, top_padding: int)
         bbox = draw.textbbox((0, 0), label, font=font)
         tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
         draw.text((cx - tw // 2, cy - th // 2), label, fill=STOP_TEXT_COLOR, font=font)
+
+    # Draw start marker last so it renders on top of any overlapping collection stop
+    sx, sy = centers[0]
+    draw.ellipse(
+        [sx - STOP_RADIUS, sy - STOP_RADIUS, sx + STOP_RADIUS, sy + STOP_RADIUS],
+        fill=START_COLOR,
+    )
+    bbox = draw.textbbox((0, 0), "S", font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    draw.text((sx - tw // 2, sy - th // 2), "S", fill=STOP_TEXT_COLOR, font=font)
 
     image = Image.alpha_composite(image, overlay)
     return image
