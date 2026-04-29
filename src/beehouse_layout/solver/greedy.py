@@ -324,6 +324,14 @@ def build_greedy(tile_info: TileInfo, *, no_hard: bool = False) -> dict[tuple[in
             continue
         if _try_place_cluster(pos, tile_info, assignments, no_hard=no_hard):
             singles_placed += 1
+        elif no_hard:
+            # Retry at adjacent flower-eligible empty tiles to work around
+            # hard-access shield rejections that block the original position
+            for nb in tile_info.all_neighbors[pos]:
+                if nb in tile_info.flower_tiles and assignments.get(nb, TileState.EMPTY) == TileState.EMPTY:
+                    if _try_place_cluster(nb, tile_info, assignments, no_hard=no_hard):
+                        singles_placed += 1
+                        break
     logger.debug("Step 2 done: placed %d single flower clusters", singles_placed)
 
     # Step 3: Fill additional beehouses near existing flowers
