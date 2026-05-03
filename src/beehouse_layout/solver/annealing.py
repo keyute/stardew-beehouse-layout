@@ -18,9 +18,9 @@ from beehouse_layout.solver.constraints import (
 from beehouse_layout.solver.greedy import _rollback, _try_place_flower_group
 from beehouse_layout.solver.scoring import score_solution
 from beehouse_layout.solver.tile_info import TileInfo, is_walkable
-from beehouse_layout.solver.tour import optimize_tour
+from beehouse_layout.solver.tour import optimize_tour_metrics
 from beehouse_layout.solver.types import AnnealStats, MoveStats, Solution, TileState
-from beehouse_layout.solver.validator import cleanup_assignments
+from beehouse_layout.solver.validator import cleanup_assignments, validate_solution
 
 # SA parameters
 INITIAL_TEMP = 100.0
@@ -643,6 +643,21 @@ def _quick_score(
     return score_solution(tile_info, assignments, tour_steps=0).score
 
 
+def _full_score(
+    tile_info: TileInfo,
+    assignments: dict[tuple[int, int], TileState],
+) -> Solution:
+    """Score a valid solution with route metrics."""
+    route = optimize_tour_metrics(tile_info, assignments)
+    return score_solution(
+        tile_info,
+        assignments,
+        route.steps,
+        route_turns=route.turns,
+        route_revisits=route.revisits,
+    )
+
+
 def anneal(
     tile_info: TileInfo,
     initial_assignments: dict[tuple[int, int], TileState],
@@ -747,8 +762,18 @@ def anneal(
         new_score = _quick_score(tile_info, assignments)
         delta = new_score - current_score
 
-        # Accept or reject
+        # Accept or reject. Accepted states are fully validated to keep the
+        # Markov chain and live metrics from drifting into disconnected layouts.
         if delta > 0 or random.random() < math.exp(delta / temp):
+            violations = validate_solution(tile_info, assignments, no_hard=no_hard)
+            if violations:
+                ms.rejected += 1
+                interval_rejects += 1
+                _rollback(assignments, changeset)
+                iterations += 1
+                temp *= sa_cooling_rate
+                continue
+
             ms.accepted += 1
             interval_accepts += 1
             current_score = new_score
@@ -760,9 +785,7 @@ def anneal(
 
                 if on_improvement is not None:
                     # Pass a copy so callback doesn't mutate SA state
-                    tour_steps = optimize_tour(tile_info, best_assignments)
-                    solution = score_solution(tile_info, best_assignments, tour_steps)
-                    on_improvement(solution)
+                    on_improvement(_full_score(tile_info, best_assignments))
         else:
             ms.rejected += 1
             interval_rejects += 1
@@ -770,7 +793,7 @@ def anneal(
             _rollback(assignments, changeset)
 
         iterations += 1
-        temp *= COOLING_RATE
+        temp *= sa_cooling_rate
 
         # Periodic progress report
         now = time.monotonic()
@@ -802,12 +825,15 @@ def anneal(
         # Periodic cleanup to prevent invalid state accumulation
         if iterations % CLEANUP_INTERVAL == 0:
             cleanup_assignments(tile_info, assignments)
+            if validate_solution(tile_info, assignments, no_hard=no_hard):
+                assignments = dict(best_assignments)
             current_score = _quick_score(tile_info, assignments)
-            if current_score > best_score:
+            if current_score > best_score and not validate_solution(
+                tile_info, assignments, no_hard=no_hard,
+            ):
                 best_score = current_score
                 best_assignments = dict(assignments)
 
     # Final scoring with tour
-    tour_steps = optimize_tour(tile_info, best_assignments)
     stats = AnnealStats(move_stats=move_stats)
-    return score_solution(tile_info, best_assignments, tour_steps), stats
+    return _full_score(tile_info, best_assignments), stats

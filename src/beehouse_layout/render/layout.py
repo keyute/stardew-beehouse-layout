@@ -68,6 +68,8 @@ LEGEND_ITEMS: list[tuple[str, str]] = [
 
 def _load_sprite(name: str) -> Image.Image:
     path = Path(ASSET_DIR) / name
+    if not path.exists():
+        path = Path(__file__).resolve().parents[3] / ASSET_DIR / name
     return Image.open(path).convert("RGBA")
 
 
@@ -125,6 +127,7 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> tuple[Image.Image,
         f"Beehouses: {solution.beehouse_count}",
         f"Flowers: {solution.flower_count} ({solution.pot_count} garden pots)",
         f"Steps: {solution.tour_steps}",
+        f"Turns: {solution.route_turns}",
         f"Hard collect: {solution.obstacle_diagonal_count}",
     ]
     separator = "  |  "
@@ -309,5 +312,3 @@ def render_layout(tile_info: TileInfo, solution: Solution) -> tuple[Image.Image,
             lx += (label_bbox[2] - label_bbox[0]) + legend_padding
 
     return image, top_padding
-
-

@@ -25,7 +25,7 @@ from beehouse_layout.render.text import render_text, save_text
 from beehouse_layout.solver.annealing import anneal
 from beehouse_layout.solver.scoring import score_solution
 from beehouse_layout.solver.tile_info import TileInfo, precompute
-from beehouse_layout.solver.tour import compute_tour_path, optimize_tour
+from beehouse_layout.solver.tour import compute_tour_path, optimize_tour_metrics
 from beehouse_layout.solver.types import AnnealStats, Solution, WorkerStatus
 from beehouse_layout.solver.constraints import check_entrance_connectivity
 from beehouse_layout.solver.validator import cleanup_assignments, validate_solution
@@ -90,6 +90,20 @@ def _validate_and_save(
     return path
 
 
+def _score_with_route_metrics(
+    tile_info: TileInfo,
+    assignments: dict,
+) -> Solution:
+    route = optimize_tour_metrics(tile_info, assignments)
+    return score_solution(
+        tile_info,
+        assignments,
+        route.steps,
+        route_turns=route.turns,
+        route_revisits=route.revisits,
+    )
+
+
 def _process_improvement(
     tile_info: TileInfo,
     solution: Solution,
@@ -102,8 +116,7 @@ def _process_improvement(
     """Clean up, validate, and save an improvement. Returns (updated best, message or None)."""
     clean_assignments = dict(solution.assignments)
     cleanup_assignments(tile_info, clean_assignments)
-    tour_steps = optimize_tour(tile_info, clean_assignments)
-    solution = score_solution(tile_info, clean_assignments, tour_steps)
+    solution = _score_with_route_metrics(tile_info, clean_assignments)
 
     if solution.score <= best_so_far.score:
         return best_so_far, None
@@ -114,7 +127,8 @@ def _process_improvement(
             f"  {solution.beehouse_count} bh, "
             f"{solution.flower_count} fl "
             f"({solution.pot_count} pt), "
-            f"{solution.tour_steps} steps -> {path}"
+            f"{solution.tour_steps} steps, "
+            f"{solution.route_turns} turns -> {path}"
         )
         return solution, msg
     return best_so_far, None
@@ -271,6 +285,9 @@ def _run_parallel(
                 p.terminate()
             for p in processes:
                 p.join(timeout=2)
+                if p.is_alive():
+                    p.kill()
+                    p.join(timeout=2)
         else:
             # Normal/stagnation exit — let workers send final stats
             for p in processes:
@@ -280,6 +297,9 @@ def _run_parallel(
                 if p.is_alive():
                     p.terminate()
                     p.join(timeout=2)
+                if p.is_alive():
+                    p.kill()
+                    p.join(timeout=2)
         # Drain remaining messages to capture final improvements and stats
         if not user_cancelled[0]:
             while True:
@@ -287,6 +307,8 @@ def _run_parallel(
                     _handle_msg(result_queue.get_nowait())
                 except queue.Empty:
                     break
+        result_queue.close()
+        result_queue.join_thread()
 
     if user_cancelled[0]:
         dashboard.log("Stopped by user")
@@ -423,8 +445,7 @@ def optimize(
         cleanup_assignments(tile_info, assignments)
         exhaustive_fill(tile_info, assignments, no_hard=no_hard, attempts=200 if no_hard else 100)
         cleanup_assignments(tile_info, assignments)
-        tour_steps = optimize_tour(tile_info, assignments)
-        greedy_solution = score_solution(tile_info, assignments, tour_steps)
+        greedy_solution = _score_with_route_metrics(tile_info, assignments)
 
         path = _validate_and_save(tile_info, greedy_solution, map_slug, no_hard=no_hard, route=route)
         if path:
@@ -432,7 +453,8 @@ def optimize(
                 f"  Greedy: {greedy_solution.beehouse_count} bh, "
                 f"{greedy_solution.flower_count} fl "
                 f"({greedy_solution.pot_count} pt), "
-                f"{greedy_solution.tour_steps} steps"
+                f"{greedy_solution.tour_steps} steps, "
+                f"{greedy_solution.route_turns} turns"
             )
             dashboard.update_best(greedy_solution)
         else:
@@ -461,14 +483,13 @@ def optimize(
             post_assignments = dict(best.assignments)
             exhaustive_fill(tile_info, post_assignments, no_hard=no_hard, attempts=200 if no_hard else 100)
             cleanup_assignments(tile_info, post_assignments)
-            post_tour = optimize_tour(tile_info, post_assignments)
-            post_solution = score_solution(tile_info, post_assignments, post_tour)
+            post_solution = _score_with_route_metrics(tile_info, post_assignments)
             if post_solution.score > best.score:
                 best = post_solution
                 dashboard.log(
                     f"  Fill: {best.beehouse_count} bh, "
                     f"{best.flower_count} fl ({best.pot_count} pt), "
-                    f"{best.tour_steps} steps"
+                    f"{best.tour_steps} steps, {best.route_turns} turns"
                 )
 
         best_path = str(OUTPUT_DIR / map_slug / "best_layout.png")
@@ -483,19 +504,20 @@ def optimize(
                 route_image = render_route(best_image, tour_path, best_top_padding)
                 save_image(route_image, best_path.replace(".png", "_route.png"))
 
-        if stats and trajectory:
+        if stats:
             stats_dir = OUTPUT_DIR / map_slug
-            # Write trajectory CSV
-            csv_path = str(stats_dir / "trajectory.csv")
-            fieldnames = ["worker_id", "iteration", "elapsed_secs", "temperature",
-                          "current_score", "best_score", "acceptance_rate",
-                          "beehouse_count", "improvements"]
-            with open(csv_path, "w", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
-                writer.writeheader()
-                for row in sorted(trajectory, key=lambda r: (r["worker_id"], r["iteration"])):
-                    writer.writerow(row)
-            dashboard.log(f"Trajectory: {csv_path}")
+            if trajectory:
+                # Write trajectory CSV
+                csv_path = str(stats_dir / "trajectory.csv")
+                fieldnames = ["worker_id", "iteration", "elapsed_secs", "temperature",
+                              "current_score", "best_score", "acceptance_rate",
+                              "beehouse_count", "improvements"]
+                with open(csv_path, "w", newline="") as f:
+                    writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    writer.writeheader()
+                    for row in sorted(trajectory, key=lambda r: (r["worker_id"], r["iteration"])):
+                        writer.writerow(row)
+                dashboard.log(f"Trajectory: {csv_path}")
 
             # Write move stats JSON
             json_path = str(stats_dir / "move_stats.json")
@@ -508,9 +530,30 @@ def optimize(
                 json.dump(all_move_stats, f, indent=2)
             dashboard.log(f"Move stats: {json_path}")
 
+            summary_path = str(stats_dir / "summary.json")
+            with open(summary_path, "w") as f:
+                json.dump({
+                    "map": map_data.name,
+                    "mode": "no-hard" if no_hard else "default",
+                    "seed": seed,
+                    "workers": workers,
+                    "stopped_by_user": user_stopped,
+                    "best": {
+                        "beehouses": best.beehouse_count,
+                        "flowers": best.flower_count,
+                        "garden_pots": best.pot_count,
+                        "steps": best.tour_steps,
+                        "turns": best.route_turns,
+                        "revisits": best.route_revisits,
+                        "hard_access": best.obstacle_diagonal_count,
+                        "score_key": best.score_key,
+                    },
+                }, f, indent=2)
+            dashboard.log(f"Summary: {summary_path}")
+
         label = "Stopped" if user_stopped else "Done"
         dashboard.log(
             f"{label}: {best.beehouse_count} bh, "
             f"{best.flower_count} fl ({best.pot_count} pt), "
-            f"{best.tour_steps} steps -> {best_path}"
+            f"{best.tour_steps} steps, {best.route_turns} turns -> {best_path}"
         )

@@ -21,6 +21,32 @@ class TourPath:
     collection_stops: list[int] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class RouteMetrics:
+    """Collection route metrics used for scoring and display."""
+
+    steps: int = 0
+    turns: int = 0
+    revisits: int = 0
+
+
+def _count_route_turns(tiles: list[tuple[int, int]]) -> int:
+    """Count direction changes in a cardinal tile path."""
+    turns = 0
+    prev_dir: tuple[int, int] | None = None
+    for a, b in zip(tiles, tiles[1:]):
+        direction = (b[0] - a[0], b[1] - a[1])
+        if prev_dir is not None and direction != prev_dir:
+            turns += 1
+        prev_dir = direction
+    return turns
+
+
+def _count_route_revisits(tiles: list[tuple[int, int]]) -> int:
+    """Count repeated visits beyond the first visit to each route tile."""
+    return len(tiles) - len(set(tiles))
+
+
 def _bfs_distances(
     start: tuple[int, int],
     walkable: set[tuple[int, int]],
@@ -297,6 +323,27 @@ def optimize_tour(
 
     # Too many stops — just return greedy distance
     return compute_tour_steps(tile_info, assignments)
+
+
+def optimize_tour_metrics(
+    tile_info: TileInfo,
+    assignments: dict[tuple[int, int], TileState],
+) -> RouteMetrics:
+    """Compute route metrics for solution scoring.
+
+    Step count uses the existing tour optimizer. Shape metrics are computed from
+    the rendered collection route, which is intentionally cheap enough for final
+    scoring and stats but not used inside every annealing move.
+    """
+    steps = optimize_tour(tile_info, assignments)
+    path = compute_tour_path(tile_info, assignments)
+    if not path.tiles:
+        return RouteMetrics(steps=steps)
+    return RouteMetrics(
+        steps=steps,
+        turns=_count_route_turns(path.tiles),
+        revisits=_count_route_revisits(path.tiles),
+    )
 
 
 def _bfs_with_parents(

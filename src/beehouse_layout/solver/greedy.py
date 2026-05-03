@@ -16,7 +16,8 @@ from beehouse_layout.solver.constraints import (
     classify_beehouse_access,
 )
 from beehouse_layout.solver.tile_info import TileInfo
-from beehouse_layout.solver.tour import compute_tour_steps
+from beehouse_layout.solver.scoring import score_solution
+from beehouse_layout.solver.tour import compute_tour_steps, optimize_tour_metrics
 from beehouse_layout.solver.types import TileState
 
 # Greedy solver parameters
@@ -438,16 +439,31 @@ def exhaustive_fill(
     ]
     if not candidates:
         return
+    if len(candidates) <= 220:
+        attempts = max(attempts, 1000)
 
     best_count = sum(1 for s in assignments.values() if s == TileState.BEEHOUSE)
     best_steps = float("inf")
+    best_score = float("-inf")
     best_assignments: dict[tuple[int, int], TileState] | None = None
 
-    for _ in range(attempts):
-        trial = dict(base)
-        random.shuffle(candidates)
+    ordered_candidates = sorted(candidates)
+    candidate_orders = [
+        ordered_candidates,
+        list(reversed(ordered_candidates)),
+        sorted(candidates, key=lambda p: (p[1], p[0])),
+        sorted(candidates, key=lambda p: (-p[1], p[0])),
+    ]
 
-        for pos in candidates:
+    for attempt in range(attempts):
+        trial = dict(base)
+        if attempt < len(candidate_orders):
+            fill_order = candidate_orders[attempt]
+        else:
+            fill_order = list(candidates)
+            random.shuffle(fill_order)
+
+        for pos in fill_order:
             if trial.get(pos, TileState.EMPTY) != TileState.EMPTY:
                 continue
             trial[pos] = TileState.BEEHOUSE
@@ -476,7 +492,21 @@ def exhaustive_fill(
             continue
 
         count = sum(1 for s in trial.values() if s == TileState.BEEHOUSE)
-        if count > best_count:
+        if len(candidates) <= 220:
+            route = optimize_tour_metrics(tile_info, trial)
+            score = score_solution(
+                tile_info,
+                trial,
+                route.steps,
+                route_turns=route.turns,
+                route_revisits=route.revisits,
+            ).score
+            if score > best_score:
+                best_score = score
+                best_count = count
+                best_steps = route.steps
+                best_assignments = trial
+        elif count > best_count:
             best_count = count
             best_steps = compute_tour_steps(tile_info, trial)
             best_assignments = trial

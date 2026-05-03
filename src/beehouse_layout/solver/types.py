@@ -25,8 +25,11 @@ class Solution:
     flower_count: int = 0
     pot_count: int = 0
     tour_steps: int = 0
+    route_turns: int = 0
+    route_revisits: int = 0
     obstacle_diagonal_count: int = 0
     score: float = 0.0
+    score_key: tuple[int, int, int, int, int, int] = (0, 0, 0, 0, 0, 0)
 
 
 @dataclass

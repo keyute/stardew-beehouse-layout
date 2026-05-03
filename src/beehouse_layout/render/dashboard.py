@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections import deque
 from types import TracebackType
 
@@ -21,6 +22,7 @@ class Dashboard:
         self._console = Console()
         self._recent_logs: deque[str] = deque(maxlen=LOG_BUFFER_SIZE)
         self._worker_statuses: dict[int, WorkerStatus] = {}
+        self._worker_updated_at: dict[int, float] = {}
         self._best = Solution()
         self._num_workers = num_workers
         self._highlighter = ReprHighlighter()
@@ -44,6 +46,7 @@ class Dashboard:
 
     def update_worker(self, status: WorkerStatus) -> None:
         self._worker_statuses[status.worker_id] = status
+        self._worker_updated_at[status.worker_id] = time.monotonic()
         self._refresh()
 
     def update_best(self, solution: Solution) -> None:
@@ -57,21 +60,23 @@ class Dashboard:
         table = Table()
         table.add_column("Worker", style="cyan", width=8)
         table.add_column("Iterations", justify="right")
-        table.add_column("Elapsed", justify="right")
         table.add_column("Temp", justify="right")
-        table.add_column("Beehouses", justify="right")
+        table.add_column("Current BH", justify="right")
         table.add_column("Improvements", justify="right")
+        table.add_column("Last Update", justify="right")
 
+        now = time.monotonic()
         for wid in range(self._num_workers):
             if wid in self._worker_statuses:
                 ws = self._worker_statuses[wid]
+                age = now - self._worker_updated_at.get(wid, now)
                 table.add_row(
                     str(wid),
                     f"{ws.iterations:,}",
-                    f"{ws.elapsed_secs:.0f}s",
                     f"{ws.temperature:.2f}",
                     str(ws.beehouse_count),
                     str(ws.improvements),
+                    f"{age:.0f}s ago",
                 )
             else:
                 table.add_row(str(wid), "...", "...", "...", "...", "...")
@@ -81,7 +86,8 @@ class Dashboard:
                 f"Best: {self._best.beehouse_count} beehouses, "
                 f"{self._best.flower_count} flowers "
                 f"({self._best.pot_count} pots), "
-                f"{self._best.tour_steps} steps",
+                f"{self._best.tour_steps} steps, "
+                f"{self._best.route_turns} turns",
                 style="bold green",
             )
         else:
