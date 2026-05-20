@@ -37,6 +37,14 @@ def check_flower_safety(
     return True
 
 
+def _has_adjacent_interactable(pos: tuple[int, int], tile_info: TileInfo) -> bool:
+    x, y = pos
+    return any(
+        (x + dx, y + dy) in tile_info.interactable_tiles
+        for dx, dy in ALL_OFFSETS
+    )
+
+
 def classify_beehouse_access(
     pos: tuple[int, int],
     tile_info: TileInfo,
@@ -44,7 +52,7 @@ def classify_beehouse_access(
 ) -> str | None:
     """Classify beehouse accessibility. Returns 'easy', 'ok', 'hard', or None (inaccessible).
 
-    'hard' only applies when a diagonal-only walkable neighbor has an adjacent
+    'hard' only applies when a diagonal-only walkable neighbor is adjacent to an
     interactable obstacle (chests, machines) — non-interactable obstacles (rocks,
     walls) are not penalized.
     """
@@ -61,15 +69,9 @@ def classify_beehouse_access(
         if dx == 0 or dy == 0:
             return "easy"
 
-        # Diagonal adjacency: check if the two "squeeze" tiles (cardinally adjacent
-        # to both beehouse and player) are interactable obstacles
-        squeeze1 = (x + dx, y)
-        squeeze2 = (x, y + dy)
-        nb_has_interactable = (
-            squeeze1 in tile_info.interactable_tiles
-            or squeeze2 in tile_info.interactable_tiles
-        )
-        if nb_has_interactable:
+        # Diagonal adjacency: nearby interactables can make this collection
+        # position awkward, but only if no better collection position exists.
+        if _has_adjacent_interactable(nb, tile_info):
             has_hard = True
         else:
             has_ok = True
