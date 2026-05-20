@@ -61,6 +61,27 @@ Options:
   --help                    Show this message and exit.
 ```
 
+### Convert a layout PNG to text
+
+Converts a non-route optimized layout PNG back to the same machine-readable format produced by `optimize --text`.
+The source map is required because the rendered PNG does not visually distinguish every empty base tile type.
+
+```sh
+uv run beehouse convert outputs/single_flower/best_layout.png --map maps/single_flower.yml --output layout.txt
+```
+
+Omit `--output` to print the text layout to stdout.
+
+### Diff two layouts
+
+Creates an image showing changed cells between two optimized layouts. Inputs can be text layouts or optimized PNGs.
+If either input is a PNG, pass the source map.
+
+```sh
+uv run beehouse diff layout-a.txt layout-b.txt --output diff.png
+uv run beehouse diff outputs/single_flower/best_layout.png layout-b.txt --map maps/single_flower.yml --output diff.png
+```
+
 ## Map format
 
 Maps are YAML files with three sections:

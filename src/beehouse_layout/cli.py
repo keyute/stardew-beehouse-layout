@@ -1,5 +1,7 @@
 import click
 
+from beehouse_layout.commands.convert import convert
+from beehouse_layout.commands.diff import diff
 from beehouse_layout.commands.optimize import optimize
 from beehouse_layout.commands.validate import validate
 
@@ -11,3 +13,5 @@ def cli() -> None:
 
 cli.add_command(validate)
 cli.add_command(optimize)
+cli.add_command(convert)
+cli.add_command(diff)
